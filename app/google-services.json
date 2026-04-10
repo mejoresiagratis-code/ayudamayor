@@ -1,0 +1,38 @@
+{
+  "_INSTRUCCIONES": [
+    "Este archivo es un PLACEHOLDER. Antes de compilar:",
+    "1. Ve a https://console.firebase.google.com",
+    "2. Crea un proyecto llamado 'AyudaMayor' (o usa uno existente)",
+    "3. Añade una app Android con package name: com.ayudamayor.app",
+    "4. Descarga el google-services.json real y reemplaza este archivo",
+    "5. Sin este paso, FCM (notificaciones push) no funcionará",
+    "   Pero la app arrancará y funcionará en todo lo demás"
+  ],
+  "project_info": {
+    "project_number": "000000000000",
+    "project_id": "ayudamayor-placeholder",
+    "storage_bucket": "ayudamayor-placeholder.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+        "android_client_info": {
+          "package_name": "com.ayudamayor.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "REEMPLAZAR_CON_TU_API_KEY_DE_FIREBASE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
