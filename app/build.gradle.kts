@@ -11,8 +11,8 @@ android {
         applicationId = "com.ayudamayor.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "3.2.23"
+        versionCode = 12
+        versionName = "3.2.31"
     }
 
     buildTypes {
