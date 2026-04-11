@@ -8,11 +8,15 @@ import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.webkit.JavascriptInterface
+import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import com.ayudamayor.app.billing.BillingManager
+import com.ayudamayor.app.iot.IotDiscovery
 
 /**
  * NativeBridge — expone funcionalidad nativa Android al JavaScript del WebView.
@@ -23,8 +27,12 @@ import com.ayudamayor.app.billing.BillingManager
  */
 class NativeBridge(
     private val context: Context,
-    private val billing: BillingManager
+    private val billing: BillingManager,
+    private val webView: WebView? = null
 ) {
+
+    private val iotDiscovery = IotDiscovery(context)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // ──────────────────────────────────────────────────────────
     // LLAMADAS TELEFÓNICAS
@@ -192,6 +200,101 @@ class NativeBridge(
     @JavascriptInterface
     fun getDeviceInfo(): String {
         return """{"brand":"${Build.BRAND}","model":"${Build.MODEL}","sdk":${Build.VERSION.SDK_INT}}"""
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // WiFi — información de la red actual
+    // window.NativeBridge.getWifiInfo()  → JSON string
+    // {
+    //   "ssid": "MiRed", "ip": "192.168.1.50",
+    //   "gateway": "192.168.1.1", "rssi": -55
+    // }
+    // ──────────────────────────────────────────────────────────
+    @JavascriptInterface
+    fun getWifiInfo(): String = iotDiscovery.getWifiInfo().toString()
+
+    // ──────────────────────────────────────────────────────────
+    // IoT Discovery — descubrir dispositivos en la red local
+    //
+    // Uso desde JS (iniciar):
+    //   window.NativeBridge.startIotScan()
+    //   → El resultado llega como callback a window.onIotScanResult(jsonString)
+    //     cada vez que se encuentran dispositivos nuevos.
+    //
+    // Uso desde JS (detener):
+    //   window.NativeBridge.stopIotScan()
+    //
+    // Estructura del JSON recibido en onIotScanResult:
+    // {
+    //   "wifi": { "ssid": "...", "ip": "...", "gateway": "...", "rssi": -60 },
+    //   "devices": [
+    //     {
+    //       "id": "shelly-1-abc",
+    //       "name": "Shelly1-ABC",
+    //       "type": "shelly",      // shelly|hue|esp|tasmota|chromecast|xiaomi|generic
+    //       "ip": "192.168.1.20",
+    //       "port": 80,
+    //       "source": "mdns",      // mdns | scan
+    //       "services": ["_http._tcp"]
+    //     }
+    //   ]
+    // }
+    // ──────────────────────────────────────────────────────────
+    @JavascriptInterface
+    fun startIotScan() {
+        iotDiscovery.start { jsonResult ->
+            // El callback viene de un hilo IO — postear al main thread para evaluar JS
+            mainHandler.post {
+                val escaped = jsonResult
+                    .replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\n", "\\n")
+                webView?.evaluateJavascript(
+                    "if(typeof window.onIotScanResult==='function') window.onIotScanResult('$escaped');",
+                    null
+                )
+            }
+        }
+    }
+
+    @JavascriptInterface
+    fun stopIotScan() {
+        iotDiscovery.stop()
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Control Samsung TV con token (2019+, TokenAuthSupport)
+    //
+    // FLUJO PRIMERA VEZ:
+    //   1. JS llama controlSamsungTV(ip, "vol_up", "")
+    //   2. TV muestra diálogo en pantalla → needsApproval=true
+    //      JS recibe: {"ok":false,"needsApproval":true,"msg":"Acepta en el TV"}
+    //   3. Usuario acepta en el TV
+    //   4. JS vuelve a llamar controlSamsungTV(ip, "vol_up", "")
+    //      → TV devuelve token en la conexión
+    //      JS recibe: {"ok":true,"token":"12345678","msg":"..."}
+    //   5. JS guarda el token en localStorage y lo reutiliza
+    //
+    // FLUJO NORMAL (token guardado):
+    //   window.NativeBridge.controlSamsungTV("192.168.1.12", "vol_up", "12345678")
+    //   → {"ok":true,"token":"12345678","msg":"Comando enviado"}
+    //
+    // Devuelve JSON string:
+    // { "ok": true/false, "token": "...", "needsApproval": false, "msg": "..." }
+    // ──────────────────────────────────────────────────────────
+    @JavascriptInterface
+    fun controlSamsungTV(ip: String, command: String, token: String): String {
+        var result = org.json.JSONObject()
+        kotlinx.coroutines.runBlocking {
+            val r = iotDiscovery.controlSamsungTV(ip, command, token.ifEmpty { null })
+            result = org.json.JSONObject().apply {
+                put("ok",            r.ok)
+                put("token",         r.token ?: token)
+                put("needsApproval", r.needsApproval)
+                put("msg",           r.msg)
+            }
+        }
+        return result.toString()
     }
 
     // ──────────────────────────────────────────────────────────
