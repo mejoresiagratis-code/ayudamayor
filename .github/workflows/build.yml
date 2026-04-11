@@ -1,54 +1,25 @@
-name: Build APK desde ZIP
+name: Build APK
 
 on:
-  workflow_dispatch:           # lanzar manualmente con un botón en GitHub
-    inputs:
-      zip_url:
-        description: 'URL del ZIP del proyecto (dejar vacío = URL por defecto)'
-        required: false
-        default: 'https://mejoresiagratis.com/ayudamayor/AyudaMayorAndroid_v10_wifi_iot.zip'
-
   push:
-    branches: [ main, master ] # también se lanza al hacer push
-
-env:
-  # URL por defecto cuando se lanza desde push (no workflow_dispatch)
-  DEFAULT_ZIP_URL: 'https://mejoresiagratis.com/ayudamayor/AyudaMayorAndroid_v10_wifi_iot.zip'
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      # ── 1. Descargar el ZIP desde el servidor ──────────────────────────────
-      - name: Descargar ZIP del proyecto
-        run: |
-          ZIP_URL="${{ github.event.inputs.zip_url || env.DEFAULT_ZIP_URL }}"
-          echo "📥 Descargando: $ZIP_URL"
-          curl -L --fail --retry 3 --retry-delay 5 \
-               -o proyecto.zip "$ZIP_URL"
-          echo "✅ Descarga completada ($(du -sh proyecto.zip | cut -f1))"
-
-      # ── 2. Descomprimir ────────────────────────────────────────────────────
-      - name: Descomprimir ZIP
-        run: |
-          unzip -q proyecto.zip
-          # Detectar la carpeta raíz del proyecto (la que contiene gradlew)
-          PROJECT_DIR=$(find . -maxdepth 2 -name "gradlew" | head -1 | xargs dirname)
-          echo "📁 Proyecto encontrado en: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          ls "$PROJECT_DIR"
-
-      # ── 3. Java 17 ─────────────────────────────────────────────────────────
-      - name: Configurar JDK 17
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # ── 4. Caché Gradle (acelera builds repetidos) ─────────────────────────
-      - name: Caché de Gradle
+      - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
@@ -57,34 +28,24 @@ jobs:
           key: gradle-${{ hashFiles('**/*.gradle.kts', '**/libs.versions.toml') }}
           restore-keys: gradle-
 
-      # ── 5. Permisos gradlew + compilar APK debug ───────────────────────────
-      - name: Compilar APK debug
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Decode keystore
         run: |
-          chmod +x gradlew
-          echo "🔨 Compilando..."
-          ./gradlew assembleDebug --no-daemon --stacktrace
-          echo "✅ APK generado:"
-          find . -name "*.apk" -exec ls -lh {} \;
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/ayudamayor-release.jks
 
-      # ── 6. Guardar APK como artifact descargable ───────────────────────────
-      - name: Subir APK
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PATH: app/ayudamayor-release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AyudaMayor-debug-${{ github.run_number }}
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
-
-      # ── 7. Mostrar resumen en GitHub ───────────────────────────────────────
-      - name: Resumen del build
-        run: |
-          APK_SIZE=$(find . -name "app-debug.apk" -exec du -sh {} \; | cut -f1)
-          echo "## ✅ Build completado" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ZIP descargado | ${{ github.event.inputs.zip_url || env.DEFAULT_ZIP_URL }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tamaño APK | $APK_SIZE |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build número | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📥 **Descarga el APK** desde la pestaña _Artifacts_ arriba a la derecha." >> $GITHUB_STEP_SUMMARY
+          name: AyudaMayor-release-${{ github.run_number }}
+          path: app/build/outputs/apk/release/app-release.apk
+          retention-days: 90

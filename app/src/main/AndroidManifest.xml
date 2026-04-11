@@ -2,35 +2,42 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Conectividad -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
-    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- WiFi: leer SSID, BSSID e información de la red actual -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-
-    <!-- SSDP/UPnP: enviar paquetes multicast para descubrir Samsung TV, LG, etc. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
-    <!-- Necesario en Android 10+ para leer el SSID de la red WiFi -->
-    <!-- Ya incluido arriba: ACCESS_FINE_LOCATION cubre también WiFi en Android 8-12 -->
+    <!-- Audio / Voz -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-    <!-- Android 13+: permiso específico para redes WiFi cercanas (NSD / mDNS) -->
+    <!-- Contactos -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+
+    <!-- Llamadas -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- GPS -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Cámara / Linterna -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FLASHLIGHT" />
+
+    <!-- Notificaciones y alertas -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- WiFi scan para IoT discovery -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="33" />
-
-    <!-- Descubrimiento de servicios en red local (NsdManager / mDNS) — no requiere permisos extra -->
-    <!-- Escaneo de red local (sockets TCP/ICMP) — cubierto por INTERNET -->
+        tools:targetApi="tiramisu" />
 
     <application
         android:name=".AyudaMayorApp"
@@ -42,6 +49,7 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:hardwareAccelerated="true">
 
+        <!-- Actividad Principal (Mayor) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -54,11 +62,30 @@
             </intent-filter>
         </activity>
 
+        <!-- Actividad Familiar -->
         <activity
             android:name=".FamilyPanelActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- FCM Service -->
+        <service
+            android:name=".fcm.AyudaMayorFCMService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Receptor de alarmas -->
+        <receiver
+            android:name=".bridge.AlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 </manifest>

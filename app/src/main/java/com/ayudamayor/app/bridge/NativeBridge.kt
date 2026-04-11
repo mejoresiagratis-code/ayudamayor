@@ -1,325 +1,276 @@
 package com.ayudamayor.app.bridge
 
 import android.Manifest
+import android.app.AlarmManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.webkit.JavascriptInterface
-import android.webkit.WebView
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.ayudamayor.app.R
 import com.ayudamayor.app.billing.BillingManager
 import com.ayudamayor.app.iot.IotDiscovery
+import com.ayudamayor.app.iot.SamsungTVController
+import org.json.JSONObject
+import java.util.Calendar
 
 /**
  * NativeBridge — expone funcionalidad nativa Android al JavaScript del WebView.
  * Accesible desde JS como: window.NativeBridge.nombreMetodo(args)
- *
- * Todos los métodos anotados con @JavascriptInterface son públicos para el JS.
- * Se ejecutan en un hilo secundario — usar Handler si necesitas tocar la UI.
+ * Todos los métodos @JavascriptInterface se ejecutan en hilo secundario.
  */
 class NativeBridge(
     private val context: Context,
     private val billing: BillingManager,
-    private val webView: WebView? = null
+    private val onEval: (String) -> Unit   // callback para evaluateJavascript en UI thread
 ) {
 
-    private val iotDiscovery = IotDiscovery(context)
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private var iotDiscovery: IotDiscovery? = null
+    private val samsungController = SamsungTVController()
 
-    // ──────────────────────────────────────────────────────────
-    // LLAMADAS TELEFÓNICAS
-    // Web:     window.open(`tel:${phone}`)
-    // Android: window.NativeBridge.call("Pablo")
-    // ──────────────────────────────────────────────────────────
+    // ── LLAMADAS ─────────────────────────────────────────────
     @JavascriptInterface
     fun call(contactNameOrPhone: String) {
-        // Si ya es un número, llamar directamente
-        val phone = if (contactNameOrPhone.matches(Regex("[+\\d\\s\\-()]+"))) {
-            contactNameOrPhone.trim()
-        } else {
-            findPhoneByName(contactNameOrPhone)
-        } ?: return
-
+        val phone = resolvePhone(contactNameOrPhone) ?: return
         if (!hasPermission(Manifest.permission.CALL_PHONE)) return
         val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$phone"))
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
     }
 
-    // ──────────────────────────────────────────────────────────
-    // SMS
-    // No disponible en web — nuevo en Android
-    // window.NativeBridge.sendSms("Pablo", "Estoy bien")
-    // ──────────────────────────────────────────────────────────
+    // ── SMS ───────────────────────────────────────────────────
     @JavascriptInterface
     fun sendSms(contactNameOrPhone: String, message: String) {
-        val phone = if (contactNameOrPhone.matches(Regex("[+\\d\\s\\-()]+"))) {
-            contactNameOrPhone.trim()
-        } else {
-            findPhoneByName(contactNameOrPhone)
-        } ?: return
-
+        val phone = resolvePhone(contactNameOrPhone) ?: return
         val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$phone"))
-        intent.putExtra("sms_body", message)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra("sms_body", message)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
     }
 
-    // ──────────────────────────────────────────────────────────
-    // LINTERNA
-    // Web:     handleSettings({type:'torch', value:true/false})
-    // Android: window.NativeBridge.setTorch(true)
-    // ──────────────────────────────────────────────────────────
+    // ── LINTERNA ──────────────────────────────────────────────
     @JavascriptInterface
     fun setTorch(on: Boolean) {
         try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val cameraId = cm.cameraIdList.firstOrNull() ?: return
-            cm.setTorchMode(cameraId, on)
-        } catch (e: Exception) {
-            // Silenciar — dispositivo sin flash
-        }
+            cm.cameraIdList.firstOrNull()?.let { cm.setTorchMode(it, on) }
+        } catch (_: Exception) {}
     }
 
-    // ──────────────────────────────────────────────────────────
-    // VOLUMEN
-    // window.NativeBridge.setVolume(75)  // 0-100
-    // ──────────────────────────────────────────────────────────
+    // ── VOLUMEN ───────────────────────────────────────────────
     @JavascriptInterface
     fun setVolume(level: Int) {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val vol = ((level.coerceIn(0, 100) / 100f) * max).toInt()
-        am.setStreamVolume(AudioManager.STREAM_MUSIC, vol, 0)
+        am.setStreamVolume(AudioManager.STREAM_MUSIC, ((level.coerceIn(0, 100) / 100f) * max).toInt(), 0)
     }
 
-    // ──────────────────────────────────────────────────────────
-    // BRILLO
-    // window.NativeBridge.setBrightness(80)  // 0-100
-    // Requiere WRITE_SETTINGS — el usuario debe concederlo en Ajustes
-    // ──────────────────────────────────────────────────────────
+    // ── BRILLO ────────────────────────────────────────────────
     @JavascriptInterface
     fun setBrightness(level: Int) {
         if (!Settings.System.canWrite(context)) return
-        val brightness = ((level.coerceIn(0, 100) / 100f) * 255).toInt()
         Settings.System.putInt(
-            context.contentResolver,
-            Settings.System.SCREEN_BRIGHTNESS,
-            brightness
+            context.contentResolver, Settings.System.SCREEN_BRIGHTNESS,
+            ((level.coerceIn(0, 100) / 100f) * 255).toInt()
         )
     }
 
-    // ──────────────────────────────────────────────────────────
-    // ABRIR APP POR NOMBRE
-    // window.NativeBridge.openApp("whatsapp")
-    // ──────────────────────────────────────────────────────────
+    // ── ABRIR APP ─────────────────────────────────────────────
     @JavascriptInterface
     fun openApp(appName: String) {
         val packages = mapOf(
-            "whatsapp"      to "com.whatsapp",
-            "maps"          to "com.google.android.apps.maps",
-            "google maps"   to "com.google.android.apps.maps",
-            "gmail"         to "com.google.android.gm",
-            "youtube"       to "com.google.android.youtube",
-            "chrome"        to "com.android.chrome",
-            "tiempo"        to "com.google.android.apps.weather",
-            "meteorologia"  to "com.google.android.apps.weather",
-            "calculadora"   to "com.google.android.calculator",
-            "fotos"         to "com.google.android.apps.photos",
-            "camara"        to "com.android.camera2",
-            "cámara"        to "com.android.camera2",
-            "calendario"    to "com.google.android.calendar",
-            "ajustes"       to "com.android.settings",
-            "configuracion" to "com.android.settings",
-            "configuración" to "com.android.settings",
-            "facebook"      to "com.facebook.katana",
-            "instagram"     to "com.instagram.android",
-            "reloj"         to "com.google.android.deskclock",
-            "alarma"        to "com.google.android.deskclock",
-            "clock"         to "com.google.android.deskclock",
-            "musica"        to "com.google.android.music",
-            "música"        to "com.google.android.music",
-            "spotify"       to "com.spotify.music",
-            "telefono"      to "com.google.android.dialer",
-            "teléfono"      to "com.google.android.dialer",
-            "contactos"     to "com.google.android.contacts",
-            "mensajes"      to "com.google.android.apps.messaging",
-            "galeria"       to "com.google.android.apps.photos",
-            "galería"       to "com.google.android.apps.photos",
+            "whatsapp" to "com.whatsapp", "maps" to "com.google.android.apps.maps",
+            "google maps" to "com.google.android.apps.maps", "gmail" to "com.google.android.gm",
+            "youtube" to "com.google.android.youtube", "chrome" to "com.android.chrome",
+            "tiempo" to "com.google.android.apps.weather", "meteorologia" to "com.google.android.apps.weather",
+            "calculadora" to "com.google.android.calculator", "fotos" to "com.google.android.apps.photos",
+            "camara" to "com.android.camera2", "cámara" to "com.android.camera2",
+            "calendario" to "com.google.android.calendar", "ajustes" to "com.android.settings",
+            "configuracion" to "com.android.settings", "configuración" to "com.android.settings",
+            "facebook" to "com.facebook.katana", "instagram" to "com.instagram.android",
+            "reloj" to "com.google.android.deskclock", "alarma" to "com.google.android.deskclock",
+            "musica" to "com.google.android.music", "música" to "com.google.android.music",
+            "spotify" to "com.spotify.music", "telefono" to "com.google.android.dialer",
+            "teléfono" to "com.google.android.dialer", "contactos" to "com.google.android.contacts",
+            "mensajes" to "com.google.android.apps.messaging", "galeria" to "com.google.android.apps.photos",
+            "galería" to "com.google.android.apps.photos",
+        )
+        val key = appName.lowercase().trim()
+        val pkg = packages[key]
+            ?: packages.entries.firstOrNull { key.contains(it.key) || it.key.contains(key) }?.value
+            ?: return
+        context.packageManager.getLaunchIntentForPackage(pkg)
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ?.let { context.startActivity(it) }
+    }
+
+    // ── ALARMAS NATIVAS ──────────────────────────────────────
+    /**
+     * Crea una alarma real en el sistema Android con AlarmManager.
+     * JS: window.NativeBridge.setAlarm("08:30", "Tomar pastilla")
+     * Si time es null o vacío, abre la app de reloj como fallback.
+     */
+    @JavascriptInterface
+    fun setAlarm(time: String, label: String) {
+        if (time.isBlank()) { openApp("reloj"); return }
+
+        val parts = time.trim().split(":")
+        if (parts.size < 2) { openApp("reloj"); return }
+
+        val hour   = parts[0].toIntOrNull() ?: run { openApp("reloj"); return }
+        val minute = parts[1].toIntOrNull() ?: run { openApp("reloj"); return }
+
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, hour)
+            set(Calendar.MINUTE, minute)
+            set(Calendar.SECOND, 0)
+            // Si ya pasó hoy, programar para mañana
+            if (before(Calendar.getInstance())) add(Calendar.DAY_OF_MONTH, 1)
+        }
+
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            nm.getNotificationChannel("alarm_channel") == null
+        ) {
+            nm.createNotificationChannel(
+                NotificationChannel("alarm_channel", "Alarmas AyudaMayor",
+                    NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
+
+        val intent = Intent(context, AlarmReceiver::class.java).apply {
+            putExtra("label", label)
+        }
+        val pi = PendingIntent.getBroadcast(
+            context,
+            (hour * 100 + minute),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val pm = context.packageManager
-        val key = appName.lowercase().trim()
-        val pkg = packages[key] ?: run {
-            // Búsqueda aproximada
-            packages.entries.firstOrNull { key.contains(it.key) || it.key.contains(key) }?.value
-        } ?: return
-
-        pm.getLaunchIntentForPackage(pkg)?.let {
-            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(it)
+        val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
+                // Sin permiso de alarmas exactas — usar setWindow como fallback (~1 min precisión)
+                am.setWindow(AlarmManager.RTC_WAKEUP, cal.timeInMillis, 60_000L, pi)
+            } else {
+                am.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(cal.timeInMillis, pi),
+                    pi
+                )
+            }
+        } catch (_: Exception) {
+            openApp("reloj")
         }
     }
 
-    // ──────────────────────────────────────────────────────────
-    // CÁMARA — tomar foto
-    // window.NativeBridge.takePicture()
-    // ──────────────────────────────────────────────────────────
+    // ── CÁMARA ────────────────────────────────────────────────
     @JavascriptInterface
     fun takePicture() {
         val intent = Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
     }
 
-    // ──────────────────────────────────────────────────────────
-    // SUSCRIPCIÓN / TIER
-    // window.NativeBridge.getTier()       → "FAMILIAR_FREE" / "FAMILIAR_PRO"
-    // window.NativeBridge.launchBilling("monthly")
-    // ──────────────────────────────────────────────────────────
+    // ── BILLING ───────────────────────────────────────────────
     @JavascriptInterface
     fun getTier(): String = billing.getCurrentTier()
 
     @JavascriptInterface
-    fun launchBilling(plan: String) {
-        billing.launchBillingFlow(plan)
-    }
+    fun launchBilling(plan: String) = billing.launchBillingFlow(plan)
 
-    // ──────────────────────────────────────────────────────────
-    // INFO DEL DISPOSITIVO
-    // window.NativeBridge.getDeviceInfo()  → JSON string
-    // ──────────────────────────────────────────────────────────
+    // ── DEVICE INFO ───────────────────────────────────────────
     @JavascriptInterface
     fun getDeviceInfo(): String {
-        return """{"brand":"${Build.BRAND}","model":"${Build.MODEL}","sdk":${Build.VERSION.SDK_INT}}"""
+        val wm = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val ssid = if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION))
+            wm?.connectionInfo?.ssid?.trim('"') ?: "" else ""
+        return JSONObject().apply {
+            put("brand", Build.BRAND)
+            put("model", Build.MODEL)
+            put("sdk",   Build.VERSION.SDK_INT)
+            put("ssid",  ssid)
+        }.toString()
     }
 
-    // ──────────────────────────────────────────────────────────
-    // WiFi — información de la red actual
-    // window.NativeBridge.getWifiInfo()  → JSON string
-    // {
-    //   "ssid": "MiRed", "ip": "192.168.1.50",
-    //   "gateway": "192.168.1.1", "rssi": -55
-    // }
-    // ──────────────────────────────────────────────────────────
-    @JavascriptInterface
-    fun getWifiInfo(): String = iotDiscovery.getWifiInfo().toString()
-
-    // ──────────────────────────────────────────────────────────
-    // IoT Discovery — descubrir dispositivos en la red local
-    //
-    // Uso desde JS (iniciar):
-    //   window.NativeBridge.startIotScan()
-    //   → El resultado llega como callback a window.onIotScanResult(jsonString)
-    //     cada vez que se encuentran dispositivos nuevos.
-    //
-    // Uso desde JS (detener):
-    //   window.NativeBridge.stopIotScan()
-    //
-    // Estructura del JSON recibido en onIotScanResult:
-    // {
-    //   "wifi": { "ssid": "...", "ip": "...", "gateway": "...", "rssi": -60 },
-    //   "devices": [
-    //     {
-    //       "id": "shelly-1-abc",
-    //       "name": "Shelly1-ABC",
-    //       "type": "shelly",      // shelly|hue|esp|tasmota|chromecast|xiaomi|generic
-    //       "ip": "192.168.1.20",
-    //       "port": 80,
-    //       "source": "mdns",      // mdns | scan
-    //       "services": ["_http._tcp"]
-    //     }
-    //   ]
-    // }
-    // ──────────────────────────────────────────────────────────
+    // ── IOT: ESCANEO DE RED ───────────────────────────────────
+    /**
+     * Inicia el escaneo IoT. Resultados llegan via window.onIotScanResult(json).
+     * JS: window.NativeBridge.startIotScan()
+     */
     @JavascriptInterface
     fun startIotScan() {
-        iotDiscovery.start { jsonResult ->
-            // El callback viene de un hilo IO — postear al main thread para evaluar JS
-            mainHandler.post {
-                val escaped = jsonResult
-                    .replace("\\", "\\\\")
-                    .replace("'", "\\'")
-                    .replace("\n", "\\n")
-                webView?.evaluateJavascript(
-                    "if(typeof window.onIotScanResult==='function') window.onIotScanResult('$escaped');",
-                    null
-                )
-            }
+        iotDiscovery?.stop()
+        iotDiscovery = IotDiscovery(context) { result ->
+            // Llamar al callback JS en cualquier hilo — evaluateJavascript es thread-safe
+            val escaped = result.replace("'", "\\'").replace("\n", "")
+            onEval("if(window.onIotScanResult) window.onIotScanResult('$escaped');")
         }
+        iotDiscovery?.start()
     }
 
+    /** Detiene el escaneo IoT. JS: window.NativeBridge.stopIotScan() */
     @JavascriptInterface
     fun stopIotScan() {
-        iotDiscovery.stop()
+        iotDiscovery?.stop()
+        iotDiscovery = null
     }
 
-    // ──────────────────────────────────────────────────────────
-    // Control Samsung TV con token (2019+, TokenAuthSupport)
-    //
-    // FLUJO PRIMERA VEZ:
-    //   1. JS llama controlSamsungTV(ip, "vol_up", "")
-    //   2. TV muestra diálogo en pantalla → needsApproval=true
-    //      JS recibe: {"ok":false,"needsApproval":true,"msg":"Acepta en el TV"}
-    //   3. Usuario acepta en el TV
-    //   4. JS vuelve a llamar controlSamsungTV(ip, "vol_up", "")
-    //      → TV devuelve token en la conexión
-    //      JS recibe: {"ok":true,"token":"12345678","msg":"..."}
-    //   5. JS guarda el token en localStorage y lo reutiliza
-    //
-    // FLUJO NORMAL (token guardado):
-    //   window.NativeBridge.controlSamsungTV("192.168.1.12", "vol_up", "12345678")
-    //   → {"ok":true,"token":"12345678","msg":"Comando enviado"}
-    //
-    // Devuelve JSON string:
-    // { "ok": true/false, "token": "...", "needsApproval": false, "msg": "..." }
-    // ──────────────────────────────────────────────────────────
+    // ── IOT: SAMSUNG TV ──────────────────────────────────────
+    /**
+     * Controla Samsung TV vía WebSocket nativo.
+     * JS: window.NativeBridge.controlSamsungTV(ip, cmd, token) → JSON string
+     * Returns: {"ok":true,"token":"xxx"} | {"ok":false,"msg":"...","needsApproval":true}
+     */
     @JavascriptInterface
-    fun controlSamsungTV(ip: String, command: String, token: String): String {
-        var result = org.json.JSONObject()
-        kotlinx.coroutines.runBlocking {
-            val r = iotDiscovery.controlSamsungTV(ip, command, token.ifEmpty { null })
-            result = org.json.JSONObject().apply {
-                put("ok",            r.ok)
-                put("token",         r.token ?: token)
-                put("needsApproval", r.needsApproval)
-                put("msg",           r.msg)
-            }
+    fun controlSamsungTV(ip: String, cmd: String, token: String): String {
+        return try {
+            samsungController.sendCommand(ip, cmd, token)
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("ok", false)
+                put("msg", e.message ?: "Error desconocido")
+            }.toString()
         }
-        return result.toString()
     }
 
-    // ──────────────────────────────────────────────────────────
-    // HELPER PRIVADO: buscar teléfono por nombre en contactos del sistema
-    // ──────────────────────────────────────────────────────────
-    private fun findPhoneByName(name: String): String? {
+    // ── FCM TOKEN ─────────────────────────────────────────────
+    /** El JS puede obtener el token FCM guardado para enviarlo al servidor */
+    @JavascriptInterface
+    fun getFcmToken(): String {
+        return context.getSharedPreferences("ayudamayor_prefs", Context.MODE_PRIVATE)
+            .getString("fcm_token_pending", "") ?: ""
+    }
+
+    // ── HELPERS ───────────────────────────────────────────────
+    private fun resolvePhone(nameOrPhone: String): String? {
+        if (nameOrPhone.matches(Regex("[+\\d\\s\\-()]+"))) return nameOrPhone.trim()
         if (!hasPermission(Manifest.permission.READ_CONTACTS)) return null
         val cursor = context.contentResolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(
-                ContactsContract.CommonDataKinds.Phone.NUMBER,
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
-            ),
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME),
             "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-            arrayOf("%$name%"),
-            null
+            arrayOf("%$nameOrPhone%"), null
         ) ?: return null
-
         return cursor.use {
-            if (it.moveToFirst()) {
+            if (it.moveToFirst())
                 it.getString(it.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER))
-            } else null
+            else null
         }
     }
 
-    private fun hasPermission(permission: String): Boolean =
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    private fun hasPermission(p: String) =
+        ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
 }

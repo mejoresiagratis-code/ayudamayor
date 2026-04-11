@@ -17,3 +17,5 @@ billing-ktx = { group = "com.android.billingclient", name = "billing-ktx", versi
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+firebase-bom = "33.1.2"
+google-services = "4.4.2"

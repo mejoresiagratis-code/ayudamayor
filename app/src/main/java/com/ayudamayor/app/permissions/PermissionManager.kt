@@ -12,18 +12,14 @@ class PermissionManager(private val activity: Activity) {
         const val REQUEST_CODE = 1001
 
         // Permisos que pedimos al arrancar la app
-        // El WebView los necesita para micrófono, GPS, llamadas y WiFi/IoT
-        val CRITICAL_PERMISSIONS: Array<String> = buildList {
-            add(Manifest.permission.RECORD_AUDIO)
-            add(Manifest.permission.READ_CONTACTS)
-            add(Manifest.permission.CALL_PHONE)
-            add(Manifest.permission.ACCESS_FINE_LOCATION) // Cubre WiFi SSID en Android 8-12
-            add(Manifest.permission.CAMERA)
-            // Android 13+: permiso específico para dispositivos WiFi cercanos
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            }
-        }.toTypedArray()
+        // El WebView los necesita para micrófono, GPS y llamadas
+        val CRITICAL_PERMISSIONS = arrayOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.CAMERA,
+        )
     }
 
     private var onGranted: (() -> Unit)? = null

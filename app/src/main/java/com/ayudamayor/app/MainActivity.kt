@@ -36,7 +36,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         billing     = BillingManager(this)
-        bridge      = NativeBridge(this, billing)
+        bridge      = NativeBridge(this, billing) { js ->
+            runOnUiThread { webView.evaluateJavascript(js, null) }
+        }
         permissions = PermissionManager(this)
 
         setupWebView()
@@ -71,6 +73,16 @@ class MainActivity : AppCompatActivity() {
                 view.evaluateJavascript(
                     "window.__isAndroid = true; window.__androidTier = \'$tier\';", null
                 )
+                // Enviar token FCM pendiente al servidor
+                val token = bridge.getFcmToken()
+                if (token.isNotBlank()) {
+                    view.evaluateJavascript(
+                        """(async()=>{try{await fetch(window.APP_BASE+'/api/push.php?action=register_fcm',
+                        {method:'POST',credentials:'same-origin',
+                         headers:{'Content-Type':'application/json'},
+                         body:JSON.stringify({token:'$token'})});}catch(e){}})();""", null
+                    )
+                }
             }
 
             override fun onReceivedError(
