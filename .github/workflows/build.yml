@@ -4,15 +4,13 @@ on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'debug o release'
-        required: false
-        default: 'debug'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
 
     steps:
       - name: Checkout code
@@ -36,7 +34,7 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # ── Build DEBUG (siempre funciona, sin keystore externo) ──────────────
+      # ── DEBUG — siempre compila, sin keystore ─────────────────────────────
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
@@ -47,13 +45,11 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      # ── Build RELEASE (solo si hay keystore en Secrets) ───────────────────
+      # ── RELEASE — solo si hay keystore ────────────────────────────────────
       - name: Decode keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > ${{ github.workspace }}/ayudamayor-release.jks
 
       - name: Build release APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/ayudamayor-release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -62,7 +58,6 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Upload release APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: AyudaMayor-release-${{ github.run_number }}

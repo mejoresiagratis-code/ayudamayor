@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import java.io.File
 
 plugins {
     alias(libs.plugins.android.application)
@@ -25,7 +26,7 @@ android {
 
     signingConfigs {
         create("release") {
-            val ksFile = System.getenv("KEYSTORE_PATH")
+            val ksPath = System.getenv("KEYSTORE_PATH")
                 ?: keystoreProperties.getProperty("storeFile")
             val ksPass = System.getenv("KEYSTORE_PASSWORD")
                 ?: keystoreProperties.getProperty("storePassword")
@@ -33,11 +34,9 @@ android {
                 ?: keystoreProperties.getProperty("keyAlias")
             val kPass  = System.getenv("KEY_PASSWORD")
                 ?: keystoreProperties.getProperty("keyPassword")
-            if (ksFile != null) {
-                storeFile     = if (java.io.File(ksFile).isAbsolute)
-                                    java.io.File(ksFile)
-                                else
-                                    rootProject.file(ksFile)
+
+            if (ksPath != null) {
+                storeFile     = rootProject.file(ksPath)
                 storePassword = ksPass
                 keyAlias      = kAlias
                 keyPassword   = kPass
@@ -72,7 +71,6 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.billing.ktx)
-    // Firebase BOM — gestiona versiones automáticamente
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
 }
