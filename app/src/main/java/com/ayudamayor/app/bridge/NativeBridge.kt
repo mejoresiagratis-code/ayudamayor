@@ -162,7 +162,6 @@ class NativeBridge(
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
-                // Sin permiso de alarmas exactas — usar setWindow como fallback (~1 min precisión)
                 am.setWindow(AlarmManager.RTC_WAKEUP, cal.timeInMillis, 60_000L, pi)
             } else {
                 am.setAlarmClock(
@@ -170,9 +169,28 @@ class NativeBridge(
                     pi
                 )
             }
+            // Persistir alarma para poder reprogramarla tras reinicio del dispositivo
+            persistAlarm(hour, minute, label, hour * 100 + minute)
         } catch (_: Exception) {
             openApp("reloj")
         }
+    }
+
+    private fun persistAlarm(hour: Int, minute: Int, label: String, id: Int) {
+        val prefs = context.getSharedPreferences("ayudamayor_alarms", Context.MODE_PRIVATE)
+        val stored = prefs.getString("alarms_json", "[]") ?: "[]"
+        try {
+            val arr = org.json.JSONArray(stored)
+            // Eliminar si ya existe con mismo id
+            val newArr = org.json.JSONArray()
+            for (i in 0 until arr.length()) {
+                if (arr.getJSONObject(i).getInt("id") != id) newArr.put(arr.getJSONObject(i))
+            }
+            newArr.put(org.json.JSONObject().apply {
+                put("id", id); put("hour", hour); put("minute", minute); put("label", label)
+            })
+            prefs.edit().putString("alarms_json", newArr.toString()).apply()
+        } catch (_: Exception) {}
     }
 
     // ── CÁMARA ────────────────────────────────────────────────
