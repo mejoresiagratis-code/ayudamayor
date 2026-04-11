@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.io.File
 import java.io.FileInputStream
 
 plugins {
@@ -7,34 +8,30 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
-// Keystore desde keystore.properties local (desarrollo) o variables de entorno (CI)
-val ksPath = System.getenv("KEYSTORE_PATH")
-    ?: run {
-        val props = Properties()
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) { props.load(f.inputStream()); props.getProperty("storeFile") } else null
-    }
-val ksPass = System.getenv("KEYSTORE_PASSWORD")
-    ?: run {
-        val props = Properties()
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) { props.load(f.inputStream()); props.getProperty("storePassword") } else null
-    }
-val ksAlias = System.getenv("KEY_ALIAS")
-    ?: run {
-        val props = Properties()
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) { props.load(f.inputStream()); props.getProperty("keyAlias") } else null
-    }
-val ksKeyPass = System.getenv("KEY_PASSWORD")
-    ?: run {
-        val props = Properties()
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) { props.load(f.inputStream()); props.getProperty("keyPassword") } else null
-    }
+fun loadProp(key: String): String? {
+    val env = System.getenv(
+        when(key) {
+            "storeFile"     -> "KEYSTORE_PATH"
+            "storePassword" -> "KEYSTORE_PASSWORD"
+            "keyAlias"      -> "KEY_ALIAS"
+            "keyPassword"   -> "KEY_PASSWORD"
+            else            -> ""
+        }
+    )
+    if (!env.isNullOrBlank()) return env
+    val f = rootProject.file("keystore.properties")
+    if (!f.exists()) return null
+    val p = Properties()
+    p.load(f.inputStream())
+    return p.getProperty(key)
+}
 
-// true solo si el keystore existe y está configurado
-val hasKeystore = ksPath != null && java.io.File(ksPath).exists()
+val ksPath    = loadProp("storeFile")
+val ksPass    = loadProp("storePassword")
+val ksAlias   = loadProp("keyAlias")
+val ksKeyPass = loadProp("keyPassword")
+val ksFile    = if (ksPath != null) File(ksPath) else null
+val hasKeystore = ksFile?.exists() == true
 
 android {
     namespace  = "com.ayudamayor.app"
@@ -51,7 +48,7 @@ android {
     signingConfigs {
         if (hasKeystore) {
             create("release") {
-                storeFile     = java.io.File(ksPath!!)   // ruta absoluta o relativa — File() lo resuelve
+                storeFile     = ksFile
                 storePassword = ksPass
                 keyAlias      = ksAlias
                 keyPassword   = ksKeyPass
@@ -62,7 +59,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Solo firmar con keystore si existe — si no, el APK queda sin firmar
             if (hasKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -72,7 +68,7 @@ android {
             )
         }
         debug {
-            // Firma debug automática de Android — no necesita keystore externo
+            // Firma debug automática — no necesita keystore externo
         }
     }
 
