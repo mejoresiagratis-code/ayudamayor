@@ -2,6 +2,7 @@ package com.ayudamayor.app
 
 import android.os.Bundle
 import android.webkit.*
+import android.webkit.GeolocationPermissions
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import com.ayudamayor.app.bridge.NativeBridge
@@ -11,10 +12,15 @@ import com.ayudamayor.app.permissions.PermissionManager
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        // URL de producción — carga la vista del Mayor directamente
         const val SERVER_URL =
             "https://mejoresiagratis.com/ayudamayor/views/mayor/index.php"
+        const val LOCATION_PERMISSION_REQUEST = 1002
     }
+
+    // Guardamos el callback de geolocalización del WebView para resolverlo
+    // cuando el usuario responda al diálogo nativo de Android
+    private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
+    private var pendingGeolocationOrigin: String = ""
 
     private lateinit var webView: WebView
     private lateinit var bridge: NativeBridge
@@ -56,8 +62,9 @@ class MainActivity : AppCompatActivity() {
             // Caché agresivo — mejora rendimiento en red lenta
             cacheMode                        = WebSettings.LOAD_DEFAULT
             setSupportZoom(false)
-            builtInZoomControls = false
-            displayZoomControls = false
+            builtInZoomControls  = false
+            displayZoomControls  = false
+            setGeolocationEnabled(true)   // necesario para que navigator.geolocation funcione
         }
 
         // Registrar el bridge — accesible desde JS como window.NativeBridge
@@ -98,12 +105,47 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // WebChromeClient necesario para micrófono y permisos de cámara en WebView
+        // WebChromeClient — gestiona permisos del WebView de forma nativa
         webView.webChromeClient = object : WebChromeClient() {
+
+            // Permisos de cámara y micrófono (MediaStream API)
             override fun onPermissionRequest(request: PermissionRequest) {
-                // Conceder todos los permisos que el WebView solicite
-                // (ya los pedimos al sistema en PermissionManager)
                 request.grant(request.resources)
+            }
+
+            // Geolocalización — callback separado específico para location
+            // Sin esto el WebView redirige al diálogo de Chrome en lugar de usar Android nativo
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String,
+                callback: GeolocationPermissions.Callback
+            ) {
+                // Verificar si tenemos el permiso de sistema concedido
+                val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                    this@MainActivity,
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                if (hasPermission) {
+                    // Permiso ya concedido por Android — pasar al WebView directamente
+                    callback.invoke(origin, true, false)
+                } else {
+                    // Pedir el permiso al sistema y luego concederlo al WebView
+                    androidx.core.app.ActivityCompat.requestPermissions(
+                        this@MainActivity,
+                        arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION),
+                        LOCATION_PERMISSION_REQUEST
+                    )
+                    // Guardamos el callback para invocarlo cuando el usuario responda
+                    pendingGeolocationCallback = callback
+                    pendingGeolocationOrigin  = origin
+                }
+            }
+
+            // Ocultar el prompt de geolocalización si el usuario lo cancela
+            override fun onGeolocationPermissionsHidePrompt() {
+                pendingGeolocationCallback?.invoke(pendingGeolocationOrigin, false, false)
+                pendingGeolocationCallback = null
+                pendingGeolocationOrigin   = ""
             }
         }
     }
@@ -113,6 +155,15 @@ class MainActivity : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         this.permissions.onRequestPermissionsResult(requestCode, grantResults)
+
+        // Resolver el permiso de geolocalización del WebView
+        if (requestCode == LOCATION_PERMISSION_REQUEST) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            pendingGeolocationCallback?.invoke(pendingGeolocationOrigin, granted, false)
+            pendingGeolocationCallback = null
+            pendingGeolocationOrigin   = ""
+        }
     }
 
     override fun onBackPressed() {
