@@ -50,6 +50,7 @@ class IotDiscovery(
         scope.coroutineContext.cancelChildren()
     }
 
+    @Suppress("DEPRECATION")
     private fun getSubnet(): String? {
         val wm = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
         val ip = wm.connectionInfo.ipAddress
@@ -57,6 +58,7 @@ class IotDiscovery(
         return "${ip and 0xff}.${ip shr 8 and 0xff}.${ip shr 16 and 0xff}"
     }
 
+    @Suppress("DEPRECATION")
     private fun getWifiInfo(): JSONObject {
         val wm = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         return JSONObject().apply {

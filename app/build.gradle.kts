@@ -34,7 +34,11 @@ android {
             val kPass  = System.getenv("KEY_PASSWORD")
                 ?: keystoreProperties.getProperty("keyPassword")
             if (ksFile != null) {
-                storeFile     = file(ksFile)
+                // Soporta ruta absoluta (CI) y relativa a raíz del proyecto (local)
+                storeFile     = if (java.io.File(ksFile).isAbsolute)
+                                    java.io.File(ksFile)
+                                else
+                                    rootProject.file(ksFile)
                 storePassword = ksPass
                 keyAlias      = kAlias
                 keyPassword   = kPass
