@@ -58,12 +58,12 @@ class MainActivity : AppCompatActivity() {
     private fun setupWebView() {
         // Persistir cookies en disco — imprescindible para mantener la sesión
         // entre aperturas de la app y cuando Android mata el proceso en background
+        webView = findViewById(R.id.webView)
+
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, true)
         }
-
-        webView = findViewById(R.id.webView)
 
         webView.settings.apply {
             javaScriptEnabled                = true
@@ -76,7 +76,7 @@ class MainActivity : AppCompatActivity() {
             setSupportZoom(false)
             builtInZoomControls  = false
             displayZoomControls  = false
-            userAgentString     += " AyudaMayorAndroid/3.2.37"
+            userAgentString     += " AyudaMayorAndroid/3.2.39"
             cacheMode            = WebSettings.LOAD_DEFAULT
         }
 
