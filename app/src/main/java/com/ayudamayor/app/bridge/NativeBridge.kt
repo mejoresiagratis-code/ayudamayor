@@ -250,17 +250,76 @@ class NativeBridge(
      * Controla Samsung TV vía WebSocket nativo.
      * JS: window.NativeBridge.controlSamsungTV(ip, cmd, token) → JSON string
      * Returns: {"ok":true,"token":"xxx"} | {"ok":false,"msg":"...","needsApproval":true}
+     * Guarda automáticamente el token recibido en SharedPreferences.
      */
     @JavascriptInterface
     fun controlSamsungTV(ip: String, cmd: String, token: String): String {
         return try {
-            samsungController.sendCommand(ip, cmd, token)
+            val result = samsungController.sendCommand(ip, cmd, token)
+            // Si la TV devolvió un token nuevo, persistirlo automáticamente
+            try {
+                val json = JSONObject(result)
+                val newToken = json.optString("token", "")
+                if (newToken.isNotBlank() && newToken != token) {
+                    saveSamsungToken(ip, newToken)
+                }
+            } catch (_: Exception) {}
+            result
         } catch (e: Exception) {
             JSONObject().apply {
                 put("ok", false)
                 put("msg", e.message ?: "Error desconocido")
             }.toString()
         }
+    }
+
+    /**
+     * Empareja con la TV Samsung sin enviar ningún comando de tecla.
+     * Solo conecta, recibe el token de bienvenida y lo persiste.
+     * Usar para el botón "Probar emparejamiento" en la UI.
+     * JS: window.NativeBridge.pairSamsungTV(ip) → JSON string
+     * Returns: {"ok":true,"token":"xxx","paired":true} | {"ok":false,"needsApproval":true,...}
+     */
+    @JavascriptInterface
+    fun pairSamsungTV(ip: String): String {
+        return try {
+            val savedToken = getSamsungToken(ip)
+            val result = samsungController.sendCommand(ip, SamsungTVController.CMD_PAIR, savedToken)
+            try {
+                val json = JSONObject(result)
+                val newToken = json.optString("token", "")
+                if (newToken.isNotBlank()) saveSamsungToken(ip, newToken)
+            } catch (_: Exception) {}
+            result
+        } catch (e: Exception) {
+            JSONObject().apply {
+                put("ok", false)
+                put("msg", e.message ?: "Error de emparejamiento")
+            }.toString()
+        }
+    }
+
+    /**
+     * Obtiene el token Samsung guardado para una IP concreta.
+     * JS: window.NativeBridge.getSamsungToken("192.168.1.12") → string
+     */
+    @JavascriptInterface
+    fun getSamsungToken(ip: String): String {
+        return context.getSharedPreferences("ayudamayor_samsung", Context.MODE_PRIVATE)
+            .getString("token_${ip.replace('.', '_')}", "") ?: ""
+    }
+
+    /**
+     * Guarda el token Samsung para una IP. Llamado automáticamente por controlSamsungTV
+     * y pairSamsungTV, pero también disponible desde JS si la web lo gestiona.
+     * JS: window.NativeBridge.saveSamsungToken("192.168.1.12", "12345678")
+     */
+    @JavascriptInterface
+    fun saveSamsungToken(ip: String, token: String) {
+        context.getSharedPreferences("ayudamayor_samsung", Context.MODE_PRIVATE)
+            .edit()
+            .putString("token_${ip.replace('.', '_')}", token)
+            .apply()
     }
 
     // ── FCM TOKEN ─────────────────────────────────────────────

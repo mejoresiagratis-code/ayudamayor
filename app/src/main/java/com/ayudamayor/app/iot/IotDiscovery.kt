@@ -247,14 +247,22 @@ class IotDiscovery(
             else -> return null
         }
 
-        val port = if (type == "tv") 8001 else 80
+        // Puerto y protocolo correctos según brand, no genérico por type
+        val (port, protocol) = when (brand) {
+            "Samsung"    -> Pair(8001, "samsung")
+            "Chromecast" -> Pair(8008, "cast")
+            "LG"         -> Pair(3000, "webos")
+            "Sony"       -> Pair(8001, "samsung")  // Sony Bravia usa API compatible
+            "Android TV" -> Pair(6466, "androidtv")
+            else         -> if (type == "tv") Pair(8001, "other") else Pair(80, "http")
+        }
         return JSONObject().apply {
             put("ip",       ip)
             put("name",     if (brand.isNotEmpty()) "$brand en $ip" else "Dispositivo en $ip")
             put("brand",    brand)
             put("type",     type)
             put("source",   "ssdp")
-            put("protocol", if (type == "tv") "other" else "shelly")
+            put("protocol", protocol)
             put("port",     port)
             put("detected", true)
         }

@@ -76,7 +76,7 @@ class MainActivity : AppCompatActivity() {
             setSupportZoom(false)
             builtInZoomControls  = false
             displayZoomControls  = false
-            userAgentString     += " AyudaMayorAndroid/3.2.36"
+            userAgentString     += " AyudaMayorAndroid/3.2.37"
             cacheMode            = WebSettings.LOAD_DEFAULT
         }
 
