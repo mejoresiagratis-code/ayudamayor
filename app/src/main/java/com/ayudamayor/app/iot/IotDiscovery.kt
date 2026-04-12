@@ -227,18 +227,23 @@ class IotDiscovery(
         val all     = "$server $st $usn"
 
         val (type, brand) = when {
-            all.contains("Samsung", ignoreCase = true) -> Pair("tv",    "Samsung")
-            all.contains("LG",      ignoreCase = true) -> Pair("tv",    "LG")
-            all.contains("Sony",    ignoreCase = true) -> Pair("tv",    "Sony")
+            all.contains("Samsung", ignoreCase = true)    -> Pair("tv",     "Samsung")
+            all.contains("Tizen",   ignoreCase = true)    -> Pair("tv",     "Samsung")   // Samsung Tizen
+            all.contains("LG",      ignoreCase = true)    -> Pair("tv",     "LG")
+            all.contains("Sony",    ignoreCase = true)    -> Pair("tv",     "Sony")
+            all.contains("Chromecast", ignoreCase = true) -> Pair("tv",     "Chromecast")
+            all.contains("dial-multiscreen", ignoreCase = true) -> Pair("tv", "Chromecast") // Cast SSDP
+            all.contains("GoogleHome", ignoreCase = true) -> Pair("other",  "Google Home")
             all.contains("Philips", ignoreCase = true) ||
-            all.contains(":hue",    ignoreCase = true) -> Pair("light", "Philips Hue")
-            all.contains("Shelly",  ignoreCase = true) -> Pair("plug",  "Shelly")
-            all.contains("Tasmota", ignoreCase = true) -> Pair("plug",  "Tasmota")
-            all.contains("Kasa",    ignoreCase = true) -> Pair("plug",  "TP-Link Kasa")
-            all.contains("WeMo",    ignoreCase = true) -> Pair("plug",  "WeMo")
-            all.contains("MediaRenderer", ignoreCase = true) -> Pair("tv", "")
-            all.contains("MediaServer",   ignoreCase = true) -> Pair("other", "")
-            all.isNotBlank() && all.trim() != "  " -> Pair("other", "")
+            all.contains(":hue",    ignoreCase = true)    -> Pair("light",  "Philips Hue")
+            all.contains("Shelly",  ignoreCase = true)    -> Pair("plug",   "Shelly")
+            all.contains("Tasmota", ignoreCase = true)    -> Pair("plug",   "Tasmota")
+            all.contains("Kasa",    ignoreCase = true)    -> Pair("plug",   "TP-Link Kasa")
+            all.contains("WeMo",    ignoreCase = true)    -> Pair("plug",   "WeMo")
+            all.contains("Livebox", ignoreCase = true)    -> Pair("router", "Orange Livebox")
+            all.contains("MediaRenderer", ignoreCase = true) -> Pair("tv",  "")
+            all.contains("MediaServer",   ignoreCase = true) -> Pair("other","")
+            all.isNotBlank() && all.trim() != "  "        -> Pair("other",  "")
             else -> return null
         }
 
@@ -257,28 +262,40 @@ class IotDiscovery(
 
     // ── Escaneo TCP de puertos ────────────────────────────────
     private suspend fun scanHost(ip: String): JSONObject? = withContext(Dispatchers.IO) {
-        // Puertos por orden de probabilidad — Samsung TV primero
         val ports = listOf(
-            8001 to "tv",    // Samsung TV WebSocket
+            8001 to "tv",    // Samsung TV (Tizen) WebSocket
             8002 to "tv",    // Samsung TV WSS
-            80   to "other", // HTTP genérico (routers, cámaras, enchufes)
+            8008 to "tv",    // Chromecast / Google Cast
+            8009 to "tv",    // Chromecast TLS
+            6466 to "tv",    // Android TV Remote
+            3000 to "tv",    // LG webOS
+            80   to "router",// Livebox, routers, cámaras
             443  to "other", // HTTPS
+            8080 to "tv",    // Descodificador Orange IPTV
             81   to "cam",   // Cámaras IP
             554  to "cam",   // RTSP
             1883 to "other", // MQTT
+            8443 to "router",// TP-Link Deco
         )
         for ((port, hint) in ports) {
             try {
                 Socket().use { sock ->
                     sock.connect(InetSocketAddress(ip, port), 500)
-                    val (type, name) = identifyByPort(ip, port, hint)
+                    val (type, brand, name) = identifyByPort(ip, port, hint)
                     return@withContext JSONObject().apply {
                         put("ip",       ip)
                         put("name",     name)
                         put("type",     type)
-                        put("brand",    "")
+                        put("brand",    brand)
                         put("source",   "scan")
-                        put("protocol", if (type == "tv") "other" else "other")
+                        put("protocol", when (port) {
+                            8001, 8002, 2878 -> "samsung"
+                            8008, 8009       -> "cast"
+                            3000             -> "webos"
+                            6466             -> "androidtv"
+                            80, 8443         -> "http"
+                            else             -> "other"
+                        })
                         put("port",     port)
                         put("detected", true)
                     }
@@ -288,12 +305,19 @@ class IotDiscovery(
         null
     }
 
-    private fun identifyByPort(ip: String, port: Int, hint: String): Pair<String, String> = when (port) {
-        8001, 8002 -> Pair("tv",    "TV Samsung ($ip)")
-        554        -> Pair("cam",   "Cámara RTSP ($ip)")
-        81         -> Pair("cam",   "Cámara IP ($ip)")
-        1883       -> Pair("other", "Broker MQTT ($ip)")
-        else       -> Pair(hint,    "Dispositivo ($ip)")
+    /** Devuelve Triple(type, brand, name) según el puerto abierto */
+    private fun identifyByPort(ip: String, port: Int, hint: String): Triple<String, String, String> = when (port) {
+        8001, 8002, 2878 -> Triple("tv",     "Samsung",          "Samsung TV ($ip)")
+        8008, 8009       -> Triple("tv",     "Chromecast",       "Chromecast ($ip)")
+        6466             -> Triple("tv",     "Android TV",       "Android TV ($ip)")
+        3000             -> Triple("tv",     "LG",               "LG TV ($ip)")
+        8080, 7777       -> Triple("tv",     "Orange",           "Descodificador Orange ($ip)")
+        554              -> Triple("cam",    "",                 "Cámara RTSP ($ip)")
+        81               -> Triple("cam",    "",                 "Cámara IP ($ip)")
+        8443             -> Triple("router", "TP-Link",          "Deco ($ip)")
+        80               -> Triple("router", "",                 "Router ($ip)")
+        1883             -> Triple("other",  "",                 "Broker MQTT ($ip)")
+        else             -> Triple(hint,     "",                 "Dispositivo ($ip)")
     }
 
     private fun emitResult(devices: List<JSONObject>, wifi: JSONObject, subnet: String) {
