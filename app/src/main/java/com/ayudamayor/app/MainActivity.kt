@@ -4,6 +4,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.*
+import android.webkit.CookieManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -45,9 +46,23 @@ class MainActivity : AppCompatActivity() {
         permissions.requestCriticalPermissions {
             webView.loadUrl(SERVER_URL)
         }
+
+        // Pedir exclusión de optimización de batería (Doze)
+        // → mantiene red activa aunque pantalla esté apagada
+        (application as? AyudaMayorApp)?.requestIgnoreBatteryOptimizations(this)
+
+        // WakeLock parcial para mantener CPU activa en background
+        AyudaMayorApp.acquireWakeLock(application)
     }
 
     private fun setupWebView() {
+        // Persistir cookies en disco — imprescindible para mantener la sesión
+        // entre aperturas de la app y cuando Android mata el proceso en background
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
+        }
+
         webView = findViewById(R.id.webView)
 
         webView.settings.apply {
@@ -195,7 +210,20 @@ class MainActivity : AppCompatActivity() {
         else super.onBackPressed()
     }
 
-    override fun onResume()  { super.onResume();  webView.onResume() }
-    override fun onPause()   { super.onPause();   webView.onPause() }
-    override fun onDestroy() { webView.destroy(); super.onDestroy() }
+    override fun onResume() {
+        super.onResume()
+        webView.onResume()
+        AyudaMayorApp.acquireWakeLock(application) // renovar si expiró
+    }
+    override fun onPause() {
+        super.onPause()
+        // NO llamar webView.onPause() — suspendería JS (GPS, SSE, timers)
+        // El usuario puede minimizar la app y necesita seguir recibiendo alertas
+        CookieManager.getInstance().flush() // persistir cookies al minimizar
+    }
+    override fun onDestroy() {
+        AyudaMayorApp.releaseWakeLock()
+        webView.destroy()
+        super.onDestroy()
+    }
 }

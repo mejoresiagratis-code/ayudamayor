@@ -3,6 +3,7 @@ package com.ayudamayor.app
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.webkit.*
+import android.webkit.CookieManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -35,6 +36,13 @@ class FamilyPanelActivity : AppCompatActivity() {
     }
 
     private fun setupWebView() {
+        // Persistir cookies en disco — imprescindible para mantener la sesión
+        // entre aperturas de la app y cuando Android mata el proceso en background
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, true)
+        }
+
         webView = findViewById(R.id.webView)
         webView.settings.apply {
             javaScriptEnabled                = true
@@ -111,5 +119,11 @@ class FamilyPanelActivity : AppCompatActivity() {
     override fun onBackPressed() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
+    override fun onPause() {
+        super.onPause()
+        // NO suspender JS — el familiar necesita recibir SOS en background
+        CookieManager.getInstance().flush()
+    }
+
     override fun onDestroy() { webView.destroy(); super.onDestroy() }
 }
