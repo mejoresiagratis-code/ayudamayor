@@ -6,8 +6,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import android.webkit.CookieManager
-import android.webkit.WebView
 
 class AyudaMayorApp : Application() {
 
@@ -42,14 +40,9 @@ class AyudaMayorApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-
-        // Cookies persistentes desde el inicio de la app
-        CookieManager.getInstance().setAcceptCookie(true)
-
-        // Habilitar debugging del WebView en builds de desarrollo
-        if (BuildConfig.DEBUG) {
-            WebView.setWebContentsDebuggingEnabled(true)
-        }
+        // CookieManager y WebView.setWebContentsDebuggingEnabled NO pueden llamarse aquí:
+        // el proceso WebView aún no está inicializado en Application.onCreate() y provoca crash.
+        // Ambos se configuran en MainActivity.setupWebView(), donde el WebView ya existe.
     }
 
     /**
