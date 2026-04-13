@@ -15,6 +15,8 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.ContactsContract
 import android.provider.Settings
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.webkit.JavascriptInterface
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -218,11 +220,29 @@ class NativeBridge(
         val ssid = if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION))
             wm?.connectionInfo?.ssid?.trim('"') ?: "" else ""
         return JSONObject().apply {
-            put("brand", Build.BRAND)
-            put("model", Build.MODEL)
-            put("sdk",   Build.VERSION.SDK_INT)
-            put("ssid",  ssid)
+            put("brand",   Build.BRAND)
+            put("model",   Build.MODEL)
+            put("sdk",     Build.VERSION.SDK_INT)
+            put("ssid",    ssid)
+            put("battery", getBatteryLevel())
         }.toString()
+    }
+
+    /**
+     * Devuelve el nivel de batería del dispositivo (0-100).
+     * JS: window.NativeBridge.getBatteryLevel() → int
+     */
+    @JavascriptInterface
+    fun getBatteryLevel(): Int {
+        return try {
+            val intent = context.registerReceiver(
+                null,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            )
+            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            if (level >= 0 && scale > 0) ((level.toFloat() / scale) * 100).toInt() else -1
+        } catch (_: Exception) { -1 }
     }
 
     // ── IOT: ESCANEO DE RED ───────────────────────────────────
@@ -342,6 +362,21 @@ class NativeBridge(
     fun getFcmToken(): String {
         return context.getSharedPreferences("ayudamayor_prefs", Context.MODE_PRIVATE)
             .getString("fcm_token_pending", "") ?: ""
+    }
+
+    /**
+     * Guarda el rol del usuario y suscribe al topic FCM correspondiente.
+     * Llamar desde JS tras login: window.NativeBridge.setUserRole("major")
+     */
+    @JavascriptInterface
+    fun setUserRole(role: String) {
+        context.getSharedPreferences("ayudamayor_prefs", Context.MODE_PRIVATE)
+            .edit().putString("user_role", role).apply()
+        // Suscribir al topic del rol
+        try {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance()
+                .subscribeToTopic("ayudamayor_$role")
+        } catch (_: Exception) {}
     }
 
     // ── HELPERS ───────────────────────────────────────────────

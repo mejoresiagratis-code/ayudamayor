@@ -13,14 +13,17 @@ import com.ayudamayor.app.bridge.NativeBridge
 class FamilyPanelActivity : AppCompatActivity() {
 
     companion object {
-        const val SERVER_URL = "https://mejoresiagratis.com/ayudamayor/views/familiar/index.php"
-        const val MIC_REQUEST = 2001
+        const val SERVER_URL    = "https://mejoresiagratis.com/ayudamayor/views/familiar/index.php"
+        const val MIC_REQUEST   = 2001
+        const val LOCATION_REQUEST = 2002
     }
 
     private lateinit var webView: WebView
     private lateinit var billing: BillingManager
     private lateinit var bridge: NativeBridge
     private var pendingWebViewPermission: PermissionRequest? = null
+    private var pendingGeolocationCallback: GeolocationPermissions.Callback? = null
+    private var pendingGeolocationOrigin: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +35,8 @@ class FamilyPanelActivity : AppCompatActivity() {
         }
 
         setupWebView()
+        // WakeLock parcial: el familiar necesita recibir SOS aunque la pantalla esté apagada
+        AyudaMayorApp.acquireWakeLock(application)
         webView.loadUrl(SERVER_URL)
     }
 
@@ -50,7 +55,7 @@ class FamilyPanelActivity : AppCompatActivity() {
             allowFileAccess                  = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode                 = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString                 += " AyudaMayorAndroid/3.2.43"
+            userAgentString                 += " AyudaMayorAndroid/3.2.45"
         }
 
         webView.addJavascriptInterface(bridge, "NativeBridge")
@@ -100,6 +105,33 @@ class FamilyPanelActivity : AppCompatActivity() {
                     )
                 }
             }
+
+            // GPS para mapa familiar (seguimiento del mayor)
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String,
+                callback: GeolocationPermissions.Callback
+            ) {
+                val hasPermission = ContextCompat.checkSelfPermission(
+                    this@FamilyPanelActivity, android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasPermission) {
+                    callback.invoke(origin, true, false)
+                } else {
+                    pendingGeolocationCallback = callback
+                    pendingGeolocationOrigin   = origin
+                    ActivityCompat.requestPermissions(
+                        this@FamilyPanelActivity,
+                        arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION),
+                        LOCATION_REQUEST
+                    )
+                }
+            }
+
+            override fun onGeolocationPermissionsHidePrompt() {
+                pendingGeolocationCallback?.invoke(pendingGeolocationOrigin, false, false)
+                pendingGeolocationCallback = null
+                pendingGeolocationOrigin   = ""
+            }
         }
     }
 
@@ -107,11 +139,20 @@ class FamilyPanelActivity : AppCompatActivity() {
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == MIC_REQUEST) {
-            val req = pendingWebViewPermission ?: return
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })
-                req.grant(req.resources) else req.deny()
-            pendingWebViewPermission = null
+        when (requestCode) {
+            MIC_REQUEST -> {
+                val req = pendingWebViewPermission ?: return
+                if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED })
+                    req.grant(req.resources) else req.deny()
+                pendingWebViewPermission = null
+            }
+            LOCATION_REQUEST -> {
+                val granted = grantResults.isNotEmpty() &&
+                        grantResults[0] == PackageManager.PERMISSION_GRANTED
+                pendingGeolocationCallback?.invoke(pendingGeolocationOrigin, granted, false)
+                pendingGeolocationCallback = null
+                pendingGeolocationOrigin   = ""
+            }
         }
     }
 
@@ -125,5 +166,14 @@ class FamilyPanelActivity : AppCompatActivity() {
         CookieManager.getInstance().flush()
     }
 
-    override fun onDestroy() { webView.destroy(); super.onDestroy() }
+    override fun onResume() {
+        super.onResume()
+        webView.onResume()
+        AyudaMayorApp.acquireWakeLock(application)
+    }
+    override fun onDestroy() {
+        AyudaMayorApp.releaseWakeLock()
+        webView.destroy()
+        super.onDestroy()
+    }
 }

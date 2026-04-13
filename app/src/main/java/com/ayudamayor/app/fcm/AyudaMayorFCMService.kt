@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.ayudamayor.app.MainActivity
 import com.ayudamayor.app.R
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import org.json.JSONObject
@@ -51,7 +52,17 @@ class AyudaMayorFCMService : FirebaseMessagingService() {
             .edit()
             .putString("fcm_token_pending", token)
             .apply()
+        // Suscribirse a topics por rol — el servidor puede hacer broadcast por segmento
+        // El rol real se obtiene cuando el usuario inicia sesión en el servidor;
+        // aquí nos suscribimos a "all" siempre y al rol guardado si existe.
+        FirebaseMessaging.getInstance().subscribeToTopic("ayudamayor_all")
+        val prefs = getSharedPreferences("ayudamayor_prefs", Context.MODE_PRIVATE)
+        val role  = prefs.getString("user_role", "") ?: ""
+        if (role.isNotBlank()) {
+            FirebaseMessaging.getInstance().subscribeToTopic("ayudamayor_$role")
+        }
     }
+
 
     private fun showNotification(
         title: String,

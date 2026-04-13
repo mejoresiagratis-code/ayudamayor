@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
 }
 
 fun loadProp(key: String): String? {
@@ -41,8 +42,8 @@ android {
         applicationId = "com.ayudamayor.app"
         minSdk        = 26
         targetSdk     = 34
-        versionCode   = 28
-        versionName   = "3.2.43"
+        versionCode   = 29
+        versionName   = "3.2.45"
     }
 
     signingConfigs {
@@ -91,4 +92,5 @@ dependencies {
     implementation(libs.billing.ktx)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    implementation(libs.firebase.crashlytics)
 }

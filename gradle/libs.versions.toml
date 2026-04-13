@@ -8,6 +8,7 @@ coroutines = "1.8.1"
 billing    = "7.0.0"
 firebase   = "33.1.2"
 gms        = "4.4.2"
+crashlytics = "3.0.2"
 
 [libraries]
 androidx-core-ktx          = { group = "androidx.core",                  name = "core-ktx",                  version.ref = "coreKtx" }
@@ -17,6 +18,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx",         name = "
 billing-ktx                = { group = "com.android.billingclient",      name = "billing-ktx",               version.ref = "billing" }
 firebase-bom               = { group = "com.google.firebase",            name = "firebase-bom",              version.ref = "firebase" }
 firebase-messaging         = { group = "com.google.firebase",            name = "firebase-messaging-ktx" }
+firebase-crashlytics       = { group = "com.google.firebase",            name = "firebase-crashlytics-ktx" }
 
 [plugins]
 android-application = { id = "com.android.application",            version.ref = "agp" }
