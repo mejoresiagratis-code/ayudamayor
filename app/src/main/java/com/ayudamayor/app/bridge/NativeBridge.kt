@@ -24,6 +24,7 @@ import com.ayudamayor.app.iot.IotDiscovery
 import com.ayudamayor.app.iot.SamsungTVController
 import org.json.JSONObject
 import java.util.Calendar
+import java.util.concurrent.Executors
 
 /**
  * NativeBridge — expone funcionalidad nativa Android al JavaScript del WebView.
@@ -38,6 +39,8 @@ class NativeBridge(
 
     private var iotDiscovery: IotDiscovery? = null
     private val samsungController = SamsungTVController()
+    // Hilo dedicado para operaciones de red Samsung (evita bloquear el hilo JS del WebView)
+    private val samsungExecutor = Executors.newSingleThreadExecutor()
 
     // ── LLAMADAS ─────────────────────────────────────────────
     @JavascriptInterface
@@ -254,23 +257,27 @@ class NativeBridge(
      */
     @JavascriptInterface
     fun controlSamsungTV(ip: String, cmd: String, token: String): String {
-        return try {
-            val result = samsungController.sendCommand(ip, cmd, token)
-            // Si la TV devolvió un token nuevo, persistirlo automáticamente
-            try {
-                val json = JSONObject(result)
-                val newToken = json.optString("token", "")
-                if (newToken.isNotBlank() && newToken != token) {
-                    saveSamsungToken(ip, newToken)
-                }
-            } catch (_: Exception) {}
-            result
-        } catch (e: Exception) {
-            JSONObject().apply {
-                put("ok", false)
-                put("msg", e.message ?: "Error desconocido")
-            }.toString()
+        samsungExecutor.execute {
+            val result = try {
+                val raw = samsungController.sendCommand(ip, cmd, token)
+                try {
+                    val json = JSONObject(raw)
+                    val newToken = json.optString("token", "")
+                    if (newToken.isNotBlank() && newToken != token) {
+                        saveSamsungToken(ip, newToken)
+                    }
+                } catch (_: Exception) {}
+                raw
+            } catch (e: Exception) {
+                JSONObject().apply {
+                    put("ok", false)
+                    put("msg", e.message ?: "Error desconocido")
+                }.toString()
+            }
+            val escaped = result.replace("'", "\\'").replace("\n", "")
+            onEval("if(window._onSamsungResult) window._onSamsungResult('$escaped');")
         }
+        return "{\"ok\":false,\"pending\":true}"
     }
 
     /**
@@ -282,21 +289,28 @@ class NativeBridge(
      */
     @JavascriptInterface
     fun pairSamsungTV(ip: String): String {
-        return try {
-            val savedToken = getSamsungToken(ip)
-            val result = samsungController.sendCommand(ip, SamsungTVController.CMD_PAIR, savedToken)
-            try {
-                val json = JSONObject(result)
-                val newToken = json.optString("token", "")
-                if (newToken.isNotBlank()) saveSamsungToken(ip, newToken)
-            } catch (_: Exception) {}
-            result
-        } catch (e: Exception) {
-            JSONObject().apply {
-                put("ok", false)
-                put("msg", e.message ?: "Error de emparejamiento")
-            }.toString()
+        // Lanzar en hilo de red para no bloquear el hilo JS del WebView
+        samsungExecutor.execute {
+            val result = try {
+                val savedToken = getSamsungToken(ip)
+                val raw = samsungController.sendCommand(ip, SamsungTVController.CMD_PAIR, savedToken)
+                try {
+                    val json = JSONObject(raw)
+                    val newToken = json.optString("token", "")
+                    if (newToken.isNotBlank()) saveSamsungToken(ip, newToken)
+                } catch (_: Exception) {}
+                raw
+            } catch (e: Exception) {
+                JSONObject().apply {
+                    put("ok", false)
+                    put("msg", e.message ?: "Error de emparejamiento")
+                }.toString()
+            }
+            val escaped = result.replace("'", "\\'").replace("\n", "")
+            onEval("if(window._onPairResult) window._onPairResult('$escaped');")
         }
+        // Devuelve vacío inmediatamente — el resultado llega por callback JS
+        return "{\"ok\":false,\"pending\":true}"
     }
 
     /**
