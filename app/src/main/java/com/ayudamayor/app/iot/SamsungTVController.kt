@@ -215,8 +215,8 @@ class SamsungTVController {
 
     private fun samsungKey(cmd: String) = when (cmd.lowercase()) {
         "power", "toggle"   -> "KEY_POWER"
-        "vol_up"            -> "KEY_VOLUP"
-        "vol_down"          -> "KEY_VOLDOWN"
+        "vol_up"            -> "KEY_VOLUMEUP"
+        "vol_down"          -> "KEY_VOLUMEDOWN"
         "mute"              -> "KEY_MUTE"
         "up"                -> "KEY_UP"
         "down"              -> "KEY_DOWN"
