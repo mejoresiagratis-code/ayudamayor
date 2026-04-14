@@ -399,4 +399,41 @@ class NativeBridge(
 
     private fun hasPermission(p: String) =
         ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
+    /**
+     * Consulta la API v2 de un dispositivo Samsung TV en la red local.
+     * Devuelve JSON: {"ok":true,"name":"...","model":"...","ip":"..."} 
+     * o {"ok":false,"msg":"..."}
+     * JS: window.NativeBridge.probeDevice("192.168.1.12")
+     */
+    @JavascriptInterface
+    fun probeDevice(ip: String): String {
+        return try {
+            val url = java.net.URL("http://$ip:8001/api/v2/")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 2000
+            conn.readTimeout    = 2000
+            conn.requestMethod  = "GET"
+            conn.connect()
+            val body = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            val json = org.json.JSONObject(body)
+            val device = json.optJSONObject("device")
+            val model  = device?.optString("modelName", "") ?: ""
+            val rawName = json.optString("name", model)
+            val name = rawName.replace(Regex("^\[TV]\s*"), "")
+            org.json.JSONObject().apply {
+                put("ok",    true)
+                put("name",  name.ifBlank { "Samsung en $ip" })
+                put("model", model)
+                put("ip",    ip)
+            }.toString()
+        } catch (e: Exception) {
+            org.json.JSONObject().apply {
+                put("ok",  false)
+                put("msg", e.message ?: "Sin respuesta")
+            }.toString()
+        }
+    }
+
+
 }
