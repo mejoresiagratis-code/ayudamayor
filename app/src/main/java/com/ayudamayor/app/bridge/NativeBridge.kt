@@ -420,7 +420,7 @@ class NativeBridge(
             val device = json.optJSONObject("device")
             val model  = device?.optString("modelName", "") ?: ""
             val rawName = json.optString("name", model)
-            val name = rawName.replace(Regex("^\[TV]\s*"), "")
+            val name = rawName.replace(Regex("^\\[TV]\\s*"), "")
             org.json.JSONObject().apply {
                 put("ok",    true)
                 put("name",  name.ifBlank { "Samsung en $ip" })
