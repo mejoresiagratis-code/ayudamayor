@@ -2,6 +2,7 @@ package com.ayudamayor.app.iot
 
 import org.json.JSONObject
 import java.io.*
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
@@ -75,12 +76,13 @@ class SamsungTVController {
         out.writeBytes("Sec-WebSocket-Version: 13\r\n\r\n")
         out.flush()
 
-        // ── Leer respuesta HTTP (línea de estado + cabeceras) ─
-        val httpReader = BufferedReader(InputStreamReader(rawIn))
-        val statusLine = httpReader.readLine() ?: return error("Sin respuesta del TV")
+        // ── Leer respuesta HTTP byte a byte (sin BufferedReader) ─
+        // BufferedReader consume más bytes de los necesarios y se lleva
+        // el frame WebSocket de bienvenida, impidiendo leer el token.
+        val statusLine = readHttpLine(rawIn)
+            ?: return error("Sin respuesta del TV")
 
         if (!statusLine.contains("101")) {
-            // 403 = aprobación pendiente, 401 = token inválido
             val needsApproval = statusLine.contains("403") || statusLine.contains("401")
             return JSONObject().apply {
                 put("ok", false)
@@ -89,41 +91,30 @@ class SamsungTVController {
             }
         }
 
-        // Consumir cabeceras HTTP hasta línea vacía
+        // Consumir cabeceras HTTP hasta línea vacía (byte a byte)
         while (true) {
-            val line = httpReader.readLine() ?: break
+            val line = readHttpLine(rawIn) ?: break
             if (line.isBlank()) break
         }
 
         // ── Leer frame WebSocket de bienvenida ────────────────
-        // La TV Samsung envía un frame JSON con el token ANTES de aceptar comandos.
-        // Formato del frame recibido (servidor→cliente, sin máscara):
-        //   byte0: 0x81 (FIN + opcode TEXT)
-        //   byte1: longitud (7 bits; si >=126 sigue con 2 o 8 bytes extra)
-        //   bytes: payload JSON
-        // Ejemplo payload: {"method":"ms.channel.connect","params":{"data":{"token":"12345678"}}}
+        // Ahora rawIn está exactamente en el inicio del frame WS,
+        // sin bytes consumidos de más por un buffer.
         var newToken = token
         var needsApproval = false
 
         try {
-            socket.soTimeout = 3000  // timeout corto para el frame de bienvenida
+            socket.soTimeout = 3000
             val b0 = rawIn.read()
             val b1 = rawIn.read()
             if (b0 != -1 && b1 != -1) {
                 val masked = (b1 and 0x80) != 0
                 var payloadLen = (b1 and 0x7F).toLong()
                 payloadLen = when {
-                    payloadLen == 126L -> {
-                        ((rawIn.read().toLong() shl 8) or rawIn.read().toLong())
-                    }
-                    payloadLen == 127L -> {
-                        var len = 0L
-                        repeat(8) { len = (len shl 8) or rawIn.read().toLong() }
-                        len
-                    }
+                    payloadLen == 126L -> ((rawIn.read().toLong() shl 8) or rawIn.read().toLong())
+                    payloadLen == 127L -> { var len = 0L; repeat(8) { len = (len shl 8) or rawIn.read().toLong() }; len }
                     else -> payloadLen
                 }
-                // Máscara (4 bytes) — el servidor normalmente no enmascara, pero por si acaso
                 val maskBytes = if (masked) ByteArray(4).also { rawIn.read(it) } else null
                 val payload = ByteArray(payloadLen.toInt())
                 var bytesRead = 0
@@ -136,25 +127,20 @@ class SamsungTVController {
                     for (i in payload.indices) payload[i] = (payload[i].toInt() xor maskBytes[i % 4].toInt()).toByte()
                 }
                 val frameJson = String(payload, Charsets.UTF_8)
-                // Extraer token del JSON de bienvenida
-                // {"method":"ms.channel.connect","params":{"data":{"token":"XXXX",...},...}}
                 try {
                     val obj = JSONObject(frameJson)
                     val data = obj.optJSONObject("params")?.optJSONObject("data")
                     val tvToken = data?.optString("token", "")
                     if (!tvToken.isNullOrBlank()) newToken = tvToken
-                    // Si el método indica que necesita aprobación
-                    val method = obj.optString("method", "")
-                    if (method == "ms.channel.unauthorized") needsApproval = true
+                    if (obj.optString("method", "") == "ms.channel.unauthorized") needsApproval = true
                 } catch (_: Exception) {}
             }
         } catch (_: Exception) {
-            // Timeout leyendo frame de bienvenida — puede que ya tenga token válido
+            // Timeout — TV no envió frame de bienvenida (token ya conocido o modelo antiguo)
         } finally {
             socket.soTimeout = TIMEOUT_MS
         }
 
-        // Si la TV pide aprobación, no enviamos comando — devolvemos para que el JS muestre aviso
         if (needsApproval) {
             socket.close()
             return JSONObject().apply {
@@ -165,7 +151,6 @@ class SamsungTVController {
             }
         }
 
-        // CMD_PAIR: solo conectar para obtener/renovar token, sin enviar tecla
         if (cmd == CMD_PAIR) {
             socket.close()
             return JSONObject().apply {
@@ -176,12 +161,11 @@ class SamsungTVController {
             }
         }
 
-        // ── Enviar comando RemoteControl ──────────────────────
+        // ── Enviar comando ────────────────────────────────────
         val key = samsungKey(cmd)
-        val payload = """{"method":"ms.remote.control","params":{"Cmd":"Click","DataOfCmd":"$key","Option":"false","TypeOfRemote":"SendRemoteKey"}}"""
-        sendWsFrame(out, payload)
+        val cmdPayload = """{"method":"ms.remote.control","params":{"Cmd":"Click","DataOfCmd":"$key","Option":"false","TypeOfRemote":"SendRemoteKey"}}"""
+        sendWsFrame(out, cmdPayload)
         out.flush()
-
         socket.close()
 
         return JSONObject().apply {
@@ -190,6 +174,25 @@ class SamsungTVController {
             put("needsApproval", false)
         }
     }
+
+    /** Lee una línea HTTP byte a byte desde el InputStream raw.
+     *  Evita usar BufferedReader que consumiría bytes del frame WebSocket siguiente. */
+    private fun readHttpLine(stream: InputStream): String? {
+        val sb = StringBuilder()
+        var prev = -1
+        while (true) {
+            val b = stream.read()
+            if (b == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (prev == '\r'.code && b == '\n'.code) {
+                // Quitar el \r del final
+                if (sb.isNotEmpty()) sb.deleteCharAt(sb.length - 1)
+                return sb.toString()
+            }
+            sb.append(b.toChar())
+            prev = b
+        }
+    }
+
 
     private fun sendWsFrame(out: DataOutputStream, text: String) {
         val data = text.toByteArray(Charsets.UTF_8)

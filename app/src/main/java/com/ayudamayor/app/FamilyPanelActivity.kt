@@ -55,7 +55,7 @@ class FamilyPanelActivity : AppCompatActivity() {
             allowFileAccess                  = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode                 = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            userAgentString                 += " AyudaMayorAndroid/3.2.45"
+            userAgentString                 += " AyudaMayorAndroid/3.2.46"
         }
 
         webView.addJavascriptInterface(bridge, "NativeBridge")

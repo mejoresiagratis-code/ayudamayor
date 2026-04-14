@@ -42,8 +42,8 @@ android {
         applicationId = "com.ayudamayor.app"
         minSdk        = 26
         targetSdk     = 34
-        versionCode   = 31
-        versionName   = "3.2.45"
+        versionCode   = 32
+        versionName   = "3.2.46"
     }
 
     signingConfigs {
