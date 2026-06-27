@@ -59,6 +59,17 @@ class SamsungTVController {
 
     /** Punto de entrada usado por NativeBridge. */
     fun sendCommand(ip: String, cmd: String, token: String): String {
+        // Encender/apagar idempotente: KEY_POWER es un toggle en Samsung, así que solo
+        // conmutamos si el estado real del TV difiere del deseado (evita apagarlo al
+        // intentar "encender" cuando ya estaba encendido).
+        if (cmd == "on" || cmd == "off") {
+            val ps = powerState(ip)   // "on" | "standby" | null (desconocido)
+            if (ps != null && ps.equals("on", true) == (cmd == "on")) {
+                return JSONObject().apply {
+                    put("ok", true); put("token", token); put("noop", true)
+                }.toString()
+            }
+        }
         // 8002 (wss, TVs 2018+ con token) primero; fallback a 8001 (ws, modelos antiguos).
         val r8002 = runChannel(ip, 8002, secure = true,  cmd = cmd, token = token)
         if (r8002.optBoolean("ok", false) || r8002.optBoolean("needsApproval", false)) return r8002.toString()
@@ -66,6 +77,25 @@ class SamsungTVController {
         return if (r8001.optBoolean("ok", false) || r8001.optBoolean("needsApproval", false))
             r8001.toString() else r8002.toString()
     }
+
+    /** Cliente HTTP corto para leer el estado de encendido (GET /api/v2/). */
+    private val httpClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(3, TimeUnit.SECONDS)
+            .callTimeout(4, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** Lee device.PowerState del TV ("on"/"standby") o null si no responde. */
+    private fun powerState(ip: String): String? = try {
+        val req = Request.Builder().url("http://$ip:8001/api/v2/").build()
+        httpClient.newCall(req).execute().use { resp ->
+            val body = resp.body?.string()
+            if (body.isNullOrBlank()) null
+            else JSONObject(body).optJSONObject("device")
+                ?.optString("PowerState", "")?.ifBlank { null }
+        }
+    } catch (_: Exception) { null }
 
     private fun runChannel(ip: String, port: Int, secure: Boolean, cmd: String, token: String): JSONObject {
         val scheme     = if (secure) "https" else "http"
@@ -133,7 +163,7 @@ class SamsungTVController {
     }
 
     private fun samsungKey(cmd: String) = when (cmd.lowercase()) {
-        "power", "toggle" -> "KEY_POWER"
+        "power", "toggle", "on", "off" -> "KEY_POWER"
         "vol_up"          -> "KEY_VOLUMEUP"
         "vol_down"        -> "KEY_VOLUMEDOWN"
         "mute"            -> "KEY_MUTE"
