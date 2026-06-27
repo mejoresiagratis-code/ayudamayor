@@ -3,6 +3,7 @@ package com.ayudamayor.app.permissions
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
@@ -18,6 +19,7 @@ class PermissionManager(private val activity: Activity) {
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.CAMERA,
         )
     }
@@ -27,7 +29,13 @@ class PermissionManager(private val activity: Activity) {
     fun requestCriticalPermissions(onAllGranted: () -> Unit) {
         this.onGranted = onAllGranted
 
-        val missing = CRITICAL_PERMISSIONS.filter {
+        // POST_NOTIFICATIONS solo es permiso en tiempo de ejecución en Android 13+ (API 33)
+        val perms = CRITICAL_PERMISSIONS.toMutableList()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        val missing = perms.filter {
             ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
         }
 

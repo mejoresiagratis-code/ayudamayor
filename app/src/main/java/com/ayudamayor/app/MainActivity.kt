@@ -37,8 +37,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         billing     = BillingManager(this)
-        bridge      = NativeBridge(this, billing) { js ->
+        bridge      = NativeBridge(this, billing, { js ->
             runOnUiThread { webView.evaluateJavascript(js, null) }
+        }) {
+            // El WebView pidió permisos → lanzar el diálogo NATIVO de Android
+            runOnUiThread { requestAppPermissionsFromWeb() }
         }
         permissions = PermissionManager(this)
 
@@ -179,6 +182,26 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    /**
+     * Llamado desde el WebView (botón "Conceder permisos") para lanzar el diálogo
+     * NATIVO de Android en vez de los prompts de Chrome. Al terminar, informa al web
+     * de qué permisos quedaron concedidos vía window._onNativePermsResult(mic,loc,notif).
+     */
+    private fun requestAppPermissionsFromWeb() {
+        permissions.requestCriticalPermissions {
+            val mic   = isGranted(android.Manifest.permission.RECORD_AUDIO)
+            val loc   = isGranted(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            val notif = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+                isGranted(android.Manifest.permission.POST_NOTIFICATIONS) else true
+            webView.evaluateJavascript(
+                "if(window._onNativePermsResult)window._onNativePermsResult($mic,$loc,$notif);", null
+            )
+        }
+    }
+
+    private fun isGranted(perm: String) =
+        ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
 
     override fun onRequestPermissionsResult(
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray

@@ -36,13 +36,26 @@ import java.util.concurrent.Executors
 class NativeBridge(
     private val context: Context,
     private val billing: BillingManager,
-    private val onEval: (String) -> Unit   // callback para evaluateJavascript en UI thread
+    private val onEval: (String) -> Unit,   // callback para evaluateJavascript en UI thread
+    private val onRequestPermissions: () -> Unit = {}   // lanza el diálogo NATIVO de permisos
 ) {
 
     private var iotDiscovery: IotDiscovery? = null
     private val samsungController = SamsungTVController()
     // Hilo dedicado para operaciones de red Samsung (evita bloquear el hilo JS del WebView)
     private val samsungExecutor = Executors.newSingleThreadExecutor()
+
+    // ── PERMISOS ─────────────────────────────────────────────
+    /**
+     * Lanza el diálogo NATIVO de Android para conceder micrófono, ubicación,
+     * notificaciones, contactos y llamadas. El WebView NO debe pedir permisos
+     * de Chrome; este método deriva todo al sistema operativo.
+     */
+    @JavascriptInterface
+    fun requestPermissions(): String {
+        onRequestPermissions()
+        return "{\"ok\":true}"
+    }
 
     // ── LLAMADAS ─────────────────────────────────────────────
     @JavascriptInterface
