@@ -278,12 +278,18 @@ class NativeBridge(
     @JavascriptInterface
     fun controlSamsungTV(ip: String, cmd: String, token: String): String {
         samsungExecutor.execute {
+            // El token guardado en el dispositivo se refresca en cada conexión aceptada,
+            // así que es la fuente de verdad: una vez vinculado, la TV no vuelve a pedir
+            // aprobación. El token recibido (de la BD) es solo la semilla inicial cuando
+            // todavía no hay ninguno guardado localmente.
+            val saved = getSamsungToken(ip)
+            val useToken = if (saved.isNotBlank()) saved else token
             val result = try {
-                val raw = samsungController.sendCommand(ip, cmd, token)
+                val raw = samsungController.sendCommand(ip, cmd, useToken)
                 try {
                     val json = JSONObject(raw)
                     val newToken = json.optString("token", "")
-                    if (newToken.isNotBlank() && newToken != token) {
+                    if (newToken.isNotBlank() && newToken != useToken) {
                         saveSamsungToken(ip, newToken)
                     }
                 } catch (_: Exception) {}
