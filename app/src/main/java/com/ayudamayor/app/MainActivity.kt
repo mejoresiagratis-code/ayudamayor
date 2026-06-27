@@ -16,7 +16,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val SERVER_URL =
-            "https://mejoresiagratis.com/ayudamayor/views/mayor/index.php"
+            "https://mejoresiagratis.com/ayudamayor/index.php"
         const val LOCATION_PERMISSION_REQUEST = 1002
         const val CAMERA_PERMISSION_REQUEST   = 1003
         const val MIC_PERMISSION_REQUEST      = 1004
