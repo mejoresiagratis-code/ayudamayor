@@ -1,249 +1,156 @@
 package com.ayudamayor.app.iot
 
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONObject
-import java.io.*
-import java.io.InputStream
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.security.SecureRandom
-import java.util.Base64
+import java.security.cert.X509Certificate
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 /**
- * SamsungTVController — control Samsung TV vía WebSocket RFC 6455.
- * Puerto 8001 (HTTP) / 8002 (WSS). Usa token para autenticación persistente.
- * Compatible con Samsung Tizen TV 2016+.
+ * SamsungTVController — control de Samsung Tizen TV vía WebSocket (OkHttp).
  *
- * Protocolo real de la API v2:
- *  1. GET /api/v2/channels/samsung.remote.control?name=<base64AppName>[&token=<token>]
- *  2. TV responde 101 Switching Protocols
- *  3. TV envía frame WS JSON: {"method":"ms.channel.connect","params":{"data":{"token":"XXXXXXXX",...}}}
- *  4. Si token vacío/nuevo: TV muestra diálogo de aprobación al usuario
- *  5. Tras aprobación (o si token ya conocido): enviamos el comando KEY_*
+ * Protocolo "Samsung API v2":
+ *   wss://<ip>:8002/api/v2/channels/samsung.remote.control?name=<base64Nombre>[&token=<token>]
+ *   (TVs 2018+; certificado TLS autofirmado). Modelos antiguos: ws://<ip>:8001 (sin TLS).
+ *
+ * Emparejamiento (primera vez, sin token):
+ *   1. Se abre la conexión → el televisor muestra el diálogo "Permitir conexión".
+ *   2. Al aceptar, el TV envía {"event":"ms.channel.connect","data":{"token":"XXXX",...}}.
+ *   3. Guardamos ese token; las siguientes conexiones lo usan y ya no piden permiso.
+ *
+ * Mantiene la firma sendCommand(ip, cmd, token) que usa NativeBridge.
  */
 class SamsungTVController {
 
     companion object {
-        private const val APP_NAME     = "AyudaMayor"
-        // base64("AyudaMayor") sin padding — verificado: echo -n "AyudaMayor" | base64 | tr -d '='
-        private const val APP_NAME_B64 = "QXl1ZGFNYXlvcg"
-        private const val TIMEOUT_MS   = 5000
-        // Cmd especial: solo conectar para obtener/renovar token sin enviar tecla
-        const val CMD_PAIR = "__pair__"
+        // base64("AyudaMayor") sin padding
+        private const val APP_NAME_B64    = "QXl1ZGFNYXlvcg"
+        const val CMD_PAIR                = "__pair__"
+        private const val PAIR_WAIT_SECS  = 30L   // margen para que el usuario pulse "Permitir"
+        private const val KEY_WAIT_SECS   = 8L
+        private const val CONNECT_TIMEOUT = 6L
     }
 
+    /** OkHttp que confía en el certificado autofirmado de la TV (solo red local). */
+    private val client: OkHttpClient by lazy {
+        val trustAll = object : X509TrustManager {
+            override fun checkClientTrusted(c: Array<X509Certificate>, a: String) {}
+            override fun checkServerTrusted(c: Array<X509Certificate>, a: String) {}
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+        }
+        val ssl = SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<javax.net.ssl.TrustManager>(trustAll), SecureRandom())
+        }
+        OkHttpClient.Builder()
+            .sslSocketFactory(ssl.socketFactory, trustAll)
+            .hostnameVerifier { _, _ -> true }
+            .connectTimeout(CONNECT_TIMEOUT, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.SECONDS)   // WS: esperamos la aprobación sin cortar
+            .pingInterval(0, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** Punto de entrada usado por NativeBridge. */
     fun sendCommand(ip: String, cmd: String, token: String): String {
-        return try {
-            // Intentar primero por WS sin TLS (puerto 8001)
-            val result = tryWebSocket(ip, 8001, cmd, token, useTls = false)
-            if (result.optBoolean("ok", false)) return result.toString()
-            // Fallback WS con TLS (puerto 8002)
-            tryWebSocket(ip, 8002, cmd, token, useTls = true).toString()
-        } catch (e: Exception) {
-            JSONObject().apply {
-                put("ok", false)
-                put("msg", e.message ?: "Error de conexión")
-            }.toString()
-        }
+        // 8002 (wss, TVs 2018+ con token) primero; fallback a 8001 (ws, modelos antiguos).
+        val r8002 = runChannel(ip, 8002, secure = true,  cmd = cmd, token = token)
+        if (r8002.optBoolean("ok", false) || r8002.optBoolean("needsApproval", false)) return r8002.toString()
+        val r8001 = runChannel(ip, 8001, secure = false, cmd = cmd, token = token)
+        return if (r8001.optBoolean("ok", false) || r8001.optBoolean("needsApproval", false))
+            r8001.toString() else r8002.toString()
     }
 
-    private fun tryWebSocket(ip: String, port: Int, cmd: String, token: String, useTls: Boolean): JSONObject {
-        val socket: Socket = if (useTls) {
-            val ssl = SSLContext.getInstance("TLS").apply {
-                init(null, arrayOf(TrustAllCerts()), SecureRandom())
-            }
-            ssl.socketFactory.createSocket().also {
-                it.connect(InetSocketAddress(ip, port), TIMEOUT_MS)
-            }
-        } else {
-            Socket().also { it.connect(InetSocketAddress(ip, port), TIMEOUT_MS) }
-        }
-
-        socket.soTimeout = TIMEOUT_MS
-        val out = DataOutputStream(socket.getOutputStream())
-        val rawIn = socket.getInputStream()
-
-        // ── Handshake WebSocket ───────────────────────────────
-        val wsKey = Base64.getEncoder().encodeToString(ByteArray(16).also { SecureRandom().nextBytes(it) })
+    private fun runChannel(ip: String, port: Int, secure: Boolean, cmd: String, token: String): JSONObject {
+        val scheme     = if (secure) "https" else "http"
         val tokenParam = if (token.isNotBlank()) "&token=$token" else ""
-        val path = "/api/v2/channels/samsung.remote.control?name=$APP_NAME_B64$tokenParam"
+        val url        = "$scheme://$ip:$port/api/v2/channels/samsung.remote.control?name=$APP_NAME_B64$tokenParam"
+        val isPair     = cmd == CMD_PAIR
 
-        out.writeBytes("GET $path HTTP/1.1\r\n")
-        out.writeBytes("Host: $ip:$port\r\n")
-        out.writeBytes("Upgrade: websocket\r\n")
-        out.writeBytes("Connection: Upgrade\r\n")
-        out.writeBytes("Sec-WebSocket-Key: $wsKey\r\n")
-        out.writeBytes("Sec-WebSocket-Version: 13\r\n\r\n")
-        out.flush()
+        val latch = CountDownLatch(1)
+        val out   = JSONObject().apply { put("ok", false) }
 
-        // ── Leer respuesta HTTP byte a byte (sin BufferedReader) ─
-        // BufferedReader consume más bytes de los necesarios y se lleva
-        // el frame WebSocket de bienvenida, impidiendo leer el token.
-        val statusLine = readHttpLine(rawIn)
-            ?: return error("Sin respuesta del TV")
-
-        if (!statusLine.contains("101")) {
-            val needsApproval = statusLine.contains("403") || statusLine.contains("401")
-            return JSONObject().apply {
-                put("ok", false)
-                put("needsApproval", needsApproval)
-                put("msg", "TV respondió: $statusLine")
-            }
-        }
-
-        // Consumir cabeceras HTTP hasta línea vacía (byte a byte)
-        while (true) {
-            val line = readHttpLine(rawIn) ?: break
-            if (line.isBlank()) break
-        }
-
-        // ── Leer frame WebSocket de bienvenida ────────────────
-        // Ahora rawIn está exactamente en el inicio del frame WS,
-        // sin bytes consumidos de más por un buffer.
-        var newToken = token
-        var needsApproval = false
-
-        try {
-            socket.soTimeout = 3000
-            val b0 = rawIn.read()
-            val b1 = rawIn.read()
-            if (b0 != -1 && b1 != -1) {
-                val masked = (b1 and 0x80) != 0
-                var payloadLen = (b1 and 0x7F).toLong()
-                payloadLen = when {
-                    payloadLen == 126L -> ((rawIn.read().toLong() shl 8) or rawIn.read().toLong())
-                    payloadLen == 127L -> { var len = 0L; repeat(8) { len = (len shl 8) or rawIn.read().toLong() }; len }
-                    else -> payloadLen
-                }
-                val maskBytes = if (masked) ByteArray(4).also { rawIn.read(it) } else null
-                val payload = ByteArray(payloadLen.toInt())
-                var bytesRead = 0
-                while (bytesRead < payload.size) {
-                    val r = rawIn.read(payload, bytesRead, payload.size - bytesRead)
-                    if (r == -1) break
-                    bytesRead += r
-                }
-                if (maskBytes != null) {
-                    for (i in payload.indices) payload[i] = (payload[i].toInt() xor maskBytes[i % 4].toInt()).toByte()
-                }
-                val frameJson = String(payload, Charsets.UTF_8)
+        val listener = object : WebSocketListener() {
+            override fun onMessage(ws: WebSocket, text: String) {
                 try {
-                    val obj = JSONObject(frameJson)
-                    val data = obj.optJSONObject("params")?.optJSONObject("data")
-                    val tvToken = data?.optString("token", "")
-                    if (!tvToken.isNullOrBlank()) newToken = tvToken
-                    if (obj.optString("method", "") == "ms.channel.unauthorized") needsApproval = true
+                    val obj = JSONObject(text)
+                    when (obj.optString("event")) {
+                        "ms.channel.connect" -> {
+                            // Conexión aceptada (o token ya válido).
+                            val tk = obj.optJSONObject("data")?.optString("token", "") ?: ""
+                            out.put("token", if (tk.isNotBlank()) tk else token)
+                            if (isPair) {
+                                out.put("ok", true); out.put("paired", true)
+                            } else {
+                                val key = samsungKey(cmd)
+                                ws.send("{\"method\":\"ms.remote.control\",\"params\":{\"Cmd\":\"Click\"," +
+                                        "\"DataOfCmd\":\"$key\",\"Option\":\"false\",\"TypeOfRemote\":\"SendRemoteKey\"}}")
+                                out.put("ok", true)
+                            }
+                            ws.close(1000, null); latch.countDown()
+                        }
+                        "ms.channel.unauthorized" -> {
+                            out.put("ok", false); out.put("needsApproval", true)
+                            out.put("msg", "Acepta la conexión en el televisor")
+                            ws.close(1000, null); latch.countDown()
+                        }
+                        // ms.channel.timeOut u otros eventos: seguir esperando la aprobación.
+                    }
                 } catch (_: Exception) {}
             }
-        } catch (_: Exception) {
-            // Timeout — TV no envió frame de bienvenida (token ya conocido o modelo antiguo)
-        } finally {
-            socket.soTimeout = TIMEOUT_MS
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                val code = response?.code ?: 0
+                if (code == 401 || code == 403) {
+                    out.put("ok", false); out.put("needsApproval", true)
+                    out.put("msg", "Acepta la conexión en el televisor")
+                } else {
+                    out.put("ok", false); out.put("msg", t.message ?: "No se pudo conectar")
+                }
+                latch.countDown()
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) { latch.countDown() }
         }
 
-        if (needsApproval) {
-            socket.close()
-            return JSONObject().apply {
-                put("ok", false)
-                put("needsApproval", true)
-                put("token", newToken)
-                put("msg", "Acepta la conexión en el televisor")
+        val ws     = client.newWebSocket(Request.Builder().url(url).build(), listener)
+        val waited = latch.await(if (isPair) PAIR_WAIT_SECS else KEY_WAIT_SECS, TimeUnit.SECONDS)
+        if (!waited) {
+            // La conexión se abrió (el popup salió) pero el usuario aún no aceptó.
+            ws.cancel()
+            if (!out.has("msg")) {
+                out.put("needsApproval", true)
+                out.put("msg", "Acepta la conexión en el televisor y reintenta")
             }
         }
-
-        if (cmd == CMD_PAIR) {
-            socket.close()
-            return JSONObject().apply {
-                put("ok", true)
-                put("token", newToken)
-                put("needsApproval", false)
-                put("paired", true)
-            }
-        }
-
-        // ── Enviar comando ────────────────────────────────────
-        val key = samsungKey(cmd)
-        val cmdPayload = """{"method":"ms.remote.control","params":{"Cmd":"Click","DataOfCmd":"$key","Option":"false","TypeOfRemote":"SendRemoteKey"}}"""
-        sendWsFrame(out, cmdPayload)
-        out.flush()
-        socket.close()
-
-        return JSONObject().apply {
-            put("ok",    true)
-            put("token", newToken)
-            put("needsApproval", false)
-        }
-    }
-
-    /** Lee una línea HTTP byte a byte desde el InputStream raw.
-     *  Evita usar BufferedReader que consumiría bytes del frame WebSocket siguiente. */
-    private fun readHttpLine(stream: InputStream): String? {
-        val sb = StringBuilder()
-        var prev = -1
-        while (true) {
-            val b = stream.read()
-            if (b == -1) return if (sb.isEmpty()) null else sb.toString()
-            if (prev == '\r'.code && b == '\n'.code) {
-                // Quitar el \r del final
-                if (sb.isNotEmpty()) sb.deleteCharAt(sb.length - 1)
-                return sb.toString()
-            }
-            sb.append(b.toChar())
-            prev = b
-        }
-    }
-
-
-    private fun sendWsFrame(out: DataOutputStream, text: String) {
-        val data = text.toByteArray(Charsets.UTF_8)
-        val mask = ByteArray(4).also { SecureRandom().nextBytes(it) }
-        out.write(0x81)  // FIN + opcode TEXT
-        when {
-            data.size <= 125 -> { out.write(0x80 or data.size); out.write(mask) }
-            data.size <= 65535 -> {
-                out.write(0x80 or 126)
-                out.write(data.size shr 8 and 0xFF)
-                out.write(data.size and 0xFF)
-                out.write(mask)
-            }
-            else -> {
-                out.write(0x80 or 127)
-                repeat(8) { i -> out.write((data.size.toLong() shr (56 - 8 * i) and 0xFF).toInt()) }
-                out.write(mask)
-            }
-        }
-        val masked = ByteArray(data.size) { i -> (data[i].toInt() xor mask[i % 4].toInt()).toByte() }
-        out.write(masked)
+        return out
     }
 
     private fun samsungKey(cmd: String) = when (cmd.lowercase()) {
-        "power", "toggle"   -> "KEY_POWER"
-        "vol_up"            -> "KEY_VOLUMEUP"
-        "vol_down"          -> "KEY_VOLUMEDOWN"
-        "mute"              -> "KEY_MUTE"
-        "up"                -> "KEY_UP"
-        "down"              -> "KEY_DOWN"
-        "left"              -> "KEY_LEFT"
-        "right"             -> "KEY_RIGHT"
-        "ok", "enter"       -> "KEY_ENTER"
-        "back"              -> "KEY_RETURN"
-        "home"              -> "KEY_HOME"
-        "menu"              -> "KEY_MENU"
-        "source"            -> "KEY_SOURCE"
-        "ch_up"             -> "KEY_CHUP"
-        "ch_down"           -> "KEY_CHDOWN"
-        "play"              -> "KEY_PLAY"
-        "pause"             -> "KEY_PAUSE"
-        "stop"              -> "KEY_STOP"
-        else                -> cmd.uppercase().let { if (it.startsWith("KEY_")) it else "KEY_$it" }
+        "power", "toggle" -> "KEY_POWER"
+        "vol_up"          -> "KEY_VOLUMEUP"
+        "vol_down"        -> "KEY_VOLUMEDOWN"
+        "mute"            -> "KEY_MUTE"
+        "up"              -> "KEY_UP"
+        "down"            -> "KEY_DOWN"
+        "left"            -> "KEY_LEFT"
+        "right"           -> "KEY_RIGHT"
+        "ok", "enter"     -> "KEY_ENTER"
+        "back"            -> "KEY_RETURN"
+        "home"            -> "KEY_HOME"
+        "menu"            -> "KEY_MENU"
+        "source"          -> "KEY_SOURCE"
+        "ch_up"           -> "KEY_CHUP"
+        "ch_down"         -> "KEY_CHDOWN"
+        "play"            -> "KEY_PLAY"
+        "pause"           -> "KEY_PAUSE"
+        "stop"            -> "KEY_STOP"
+        else              -> cmd.uppercase().let { if (it.startsWith("KEY_")) it else "KEY_$it" }
     }
-
-    private fun error(msg: String) = JSONObject().apply { put("ok", false); put("msg", msg) }
-}
-
-/** Trust manager que acepta cualquier certificado — solo para LAN local */
-private class TrustAllCerts : javax.net.ssl.X509TrustManager {
-    override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>, a: String) {}
-    override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>, a: String) {}
-    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
 }

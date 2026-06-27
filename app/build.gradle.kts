@@ -42,8 +42,8 @@ android {
         applicationId = "com.ayudamayor.app"
         minSdk        = 26
         targetSdk     = 34
-        versionCode   = 33
-        versionName   = "3.2.46"
+        versionCode   = 34
+        versionName   = "3.2.47"
     }
 
     signingConfigs {
@@ -93,4 +93,5 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.crashlytics)
+    implementation(libs.okhttp)
 }
