@@ -30,9 +30,9 @@ class FamilyPanelActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         billing = BillingManager(this)
-        bridge  = NativeBridge(this, billing) { js ->
+        bridge  = NativeBridge(this, billing, { js ->
             runOnUiThread { webView.evaluateJavascript(js, null) }
-        }
+        })
 
         setupWebView()
         // WakeLock parcial: el familiar necesita recibir SOS aunque la pantalla esté apagada
