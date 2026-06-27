@@ -255,7 +255,7 @@ class NativeBridge(
         iotDiscovery?.stop()
         iotDiscovery = IotDiscovery(context) { result ->
             // Llamar al callback JS en cualquier hilo — evaluateJavascript es thread-safe
-            val escaped = result.replace("'", "\\'").replace("\n", "")
+            val escaped = result.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "").replace("\r", "")
             onEval("if(window.onIotScanResult) window.onIotScanResult('$escaped');")
         }
         iotDiscovery?.start()
@@ -294,7 +294,7 @@ class NativeBridge(
                     put("msg", e.message ?: "Error desconocido")
                 }.toString()
             }
-            val escaped = result.replace("'", "\\'").replace("\n", "")
+            val escaped = result.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "").replace("\r", "")
             onEval("if(window._onSamsungResult) window._onSamsungResult('$escaped');")
         }
         return "{\"ok\":false,\"pending\":true}"
@@ -326,7 +326,7 @@ class NativeBridge(
                     put("msg", e.message ?: "Error de emparejamiento")
                 }.toString()
             }
-            val escaped = result.replace("'", "\\'").replace("\n", "")
+            val escaped = result.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "").replace("\r", "")
             onEval("if(window._onPairResult) window._onPairResult('$escaped');")
         }
         // Devuelve vacío inmediatamente — el resultado llega por callback JS
