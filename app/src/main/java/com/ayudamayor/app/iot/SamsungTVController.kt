@@ -72,10 +72,21 @@ class SamsungTVController {
         }
         // 8002 (wss, TVs 2018+ con token) primero; fallback a 8001 (ws, modelos antiguos).
         val r8002 = runChannel(ip, 8002, secure = true,  cmd = cmd, token = token)
-        if (r8002.optBoolean("ok", false) || r8002.optBoolean("needsApproval", false)) return r8002.toString()
-        val r8001 = runChannel(ip, 8001, secure = false, cmd = cmd, token = token)
-        return if (r8001.optBoolean("ok", false) || r8001.optBoolean("needsApproval", false))
-            r8001.toString() else r8002.toString()
+        val result = if (r8002.optBoolean("ok", false) || r8002.optBoolean("needsApproval", false)) {
+            r8002
+        } else {
+            val r8001 = runChannel(ip, 8001, secure = false, cmd = cmd, token = token)
+            if (r8001.optBoolean("ok", false) || r8001.optBoolean("needsApproval", false)) r8001 else r8002
+        }
+        // Adjuntar diagnóstico al msg cuando falla (visible en el toast).
+        if (!result.optBoolean("ok", false)) {
+            val ev = result.optString("event", "").ifBlank {
+                if (result.optBoolean("timeout", false)) "timeout" else result.optString("fail", "?")
+            }
+            val dbg = "[p${result.opt("port")} tok:${if (result.optBoolean("sentToken", false)) "si" else "no"} ev:$ev]"
+            result.put("msg", (result.optString("msg", "") + " " + dbg).trim())
+        }
+        return result.toString()
     }
 
     /** Cliente HTTP corto para leer el estado de encendido (GET /api/v2/). */
@@ -104,17 +115,23 @@ class SamsungTVController {
         val isPair     = cmd == CMD_PAIR
 
         val latch = CountDownLatch(1)
-        val out   = JSONObject().apply { put("ok", false) }
+        val out   = JSONObject().apply {
+            put("ok", false); put("port", port); put("sentToken", token.isNotBlank())
+        }
 
         val listener = object : WebSocketListener() {
             override fun onMessage(ws: WebSocket, text: String) {
                 try {
                     val obj = JSONObject(text)
-                    when (obj.optString("event")) {
+                    val ev  = obj.optString("event")
+                    out.put("event", ev)
+                    out.put("raw", text.take(180))
+                    when (ev) {
                         "ms.channel.connect" -> {
                             // Conexión aceptada (o token ya válido).
                             val tk = obj.optJSONObject("data")?.optString("token", "") ?: ""
                             out.put("token", if (tk.isNotBlank()) tk else token)
+                            out.put("gotToken", tk.isNotBlank())
                             if (isPair) {
                                 out.put("ok", true); out.put("paired", true)
                             } else {
@@ -137,6 +154,8 @@ class SamsungTVController {
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 val code = response?.code ?: 0
+                out.put("failCode", code)
+                out.put("fail", t.message ?: "")
                 if (code == 401 || code == 403) {
                     out.put("ok", false); out.put("needsApproval", true)
                     out.put("msg", "Acepta la conexión en el televisor")
@@ -154,6 +173,7 @@ class SamsungTVController {
         if (!waited) {
             // La conexión se abrió (el popup salió) pero el usuario aún no aceptó.
             ws.cancel()
+            out.put("timeout", true)
             if (!out.has("msg")) {
                 out.put("needsApproval", true)
                 out.put("msg", "Acepta la conexión en el televisor y reintenta")
